@@ -12,8 +12,8 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("Installs MirrorDock for the current Windows user")]
 [assembly: AssemblyCompany("onlyilir")]
 [assembly: AssemblyCopyright("Copyright (c) 2026 onlyilir. MIT License.")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.0.1.0")]
+[assembly: AssemblyFileVersion("1.0.1.0")]
 
 namespace MirrorDock
 {

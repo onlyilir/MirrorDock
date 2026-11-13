@@ -90,8 +90,16 @@ if ($args -contains "-Release") {
         "Settings are saved in %APPDATA%\MirrorDock.",
         "Help and updates: https://github.com/onlyilir/MirrorDock")
     $zip = Join-Path $rel "MirrorDock-$ver-portable.zip"
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [System.IO.Compression.ZipFile]::CreateFromDirectory((Join-Path $tmp "portable"), $zip)
+    # Build the zip entry by entry so paths use "/" (CreateFromDirectory on .NET 4.x writes "\", which some unzip tools mishandle).
+    Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+    $base = Join-Path $tmp "portable"
+    $za = [System.IO.Compression.ZipFile]::Open($zip, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($f in Get-ChildItem $base -Recurse -File) {
+            $entry = $f.FullName.Substring($base.Length + 1).Replace('\', '/')
+            [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($za, $f.FullName, $entry, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+        }
+    } finally { $za.Dispose() }
     Write-Host "Built $zip"
 
     $sums = Get-ChildItem $rel -File | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + "  " + $_.Name }

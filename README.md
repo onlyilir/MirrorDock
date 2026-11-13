@@ -8,6 +8,8 @@ Plug in your phone (or connect over Wi-Fi), click **Start mirroring**, and your 
 
 **[Download the latest version](https://github.com/onlyilir/MirrorDock/releases/latest)** for Windows 10 or 11.
 
+<a href="https://buymeacoffee.com/only.ilir"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy me a coffee"></a>
+
 ## Features
 
 - **Smooth, sharp video.** Hardware H.264 from the phone, decoded by Windows itself, at up to 120 fps.
@@ -31,8 +33,8 @@ Plug in your phone (or connect over Wi-Fi), click **Start mirroring**, and your 
 
 | File | What it is |
 | --- | --- |
-| `MirrorDock-1.0.0-Setup.exe` | Installer. Adds a Start menu entry, a desktop shortcut and an uninstaller in *Settings > Apps*. No admin rights needed. |
-| `MirrorDock-1.0.0-portable.zip` | Unzip anywhere and run `MirrorDock.exe`. Nothing is installed. |
+| `MirrorDock-1.0.1-Setup.exe` | Installer. Adds a Start menu entry, a desktop shortcut and an uninstaller in *Settings > Apps*. No admin rights needed. |
+| `MirrorDock-1.0.1-portable.zip` | Unzip anywhere and run `MirrorDock.exe`. Nothing is installed. |
 
 <img src="docs/screenshots/installer.png" alt="MirrorDock installer" width="420">
 
@@ -43,7 +45,7 @@ MirrorDock is new and not code-signed (certificates cost hundreds of dollars a y
 You can check that your download matches the release by comparing its SHA-256 hash with `SHA256SUMS.txt` on the release page:
 
 ```
-Get-FileHash .\MirrorDock-1.0.0-Setup.exe -Algorithm SHA256
+Get-FileHash .\MirrorDock-1.0.1-Setup.exe -Algorithm SHA256
 ```
 
 The full source is in this repo, and you can build it yourself (see below).
@@ -113,6 +115,10 @@ powershell -ExecutionPolicy Bypass -File tests\run-selftest.ps1   # records 6 s 
 ## Contributing
 
 Bug reports and pull requests are welcome. Please include *Help > Copy diagnostics* in issues. The code is C# 5 (so it builds with the compiler that comes with Windows) and Java 8.
+
+## Support
+
+MirrorDock is free and always will be. If it saves you time, you can [buy me a coffee](https://buymeacoffee.com/only.ilir). Thank you!
 
 ## License
 

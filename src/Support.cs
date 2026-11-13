@@ -14,7 +14,7 @@ namespace MirrorDock
     static class Links
     {
         public const string Repo = "onlyilir/MirrorDock";
-        public const string BuyMeACoffee = "";   // e.g. "yourname" -> https://buymeacoffee.com/yourname
+        public const string BuyMeACoffee = "only.ilir";
         public static string RepoUrl { get { return "https://github.com/" + Repo; } }
         public static string IssuesUrl { get { return RepoUrl + "/issues/new"; } }
         public static string CoffeeUrl { get { return "https://buymeacoffee.com/" + BuyMeACoffee; } }
