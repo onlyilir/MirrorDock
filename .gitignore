@@ -1,0 +1,5 @@
+dist/
+build/
+*.pdb
+# local working notes (contain device details)
+HANDOVER.md

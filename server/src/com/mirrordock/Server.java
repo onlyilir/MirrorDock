@@ -1,0 +1,241 @@
+package com.mirrordock;
+
+import android.graphics.Bitmap;
+import android.graphics.PixelFormat;
+import android.media.Image;
+import android.media.ImageReader;
+import android.media.MediaCodec;
+import android.media.MediaCodecInfo;
+import android.media.MediaFormat;
+import android.net.LocalServerSocket;
+import android.net.LocalSocket;
+import android.os.Bundle;
+import android.os.Looper;
+import android.view.Surface;
+
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+
+/**
+ * MirrorDock phone-side engine. Started by the PC through:
+ *   adb shell CLASSPATH=/data/local/tmp/mirrordock.jar app_process / com.mirrordock.Server
+ *       <socket> <maxSize> <jpegQuality> <fps> <codec h264|jpeg> <bitrateMbps> <audio 0|1>
+ *
+ * Sockets, accepted in order: video, control, then audio (only when audio=1).
+ * Video (phone -> PC): "MDK2", byte codec (0 jpeg, 1 h264), then packets:
+ *   int length, int deviceW, int deviceH, int frameW, int frameH, long ptsUs, byte flags (1 config, 2 keyframe), data
+ * Control: PC -> phone input (see Controller); phone -> PC clipboard text: byte 1, int length, UTF-8.
+ * Audio (phone -> PC): "MDA1", byte status (1 ok, 0 unavailable), then int length + raw PCM s16le 48 kHz stereo.
+ */
+public final class Server {
+
+    static volatile boolean running = true;
+    static volatile boolean keyFrameRequested;
+    static final Object videoLock = new Object();
+
+    public static void main(String[] args) {
+        String socketName = args.length > 0 ? args[0] : "mirrordock";
+        int maxSize = arg(args, 1, 1280);
+        int quality = arg(args, 2, 75);
+        int fps = arg(args, 3, 60);
+        boolean h264 = args.length <= 4 || !"jpeg".equals(args[4]);
+        int bitrate = arg(args, 5, 8) * 1000000;
+        boolean audio = arg(args, 6, 0) == 1;
+
+        try { Looper.prepareMainLooper(); } catch (Throwable ignored) { }
+        Workarounds.apply();
+        log("MirrorDock engine " + Version.NAME + " starting (" + (h264 ? "H.264 " + (bitrate / 1000000) + " Mbps" : "JPEG q" + quality)
+                + ", max " + maxSize + ", " + fps + " fps, audio " + (audio ? "on" : "off") + ")");
+
+        final Capture capture = new Capture();
+        final Controller controller = new Controller();
+        Runtime.getRuntime().addShutdownHook(new Thread() {
+            @Override public void run() { capture.release(); controller.restore(); }
+        });
+
+        try {
+            LocalServerSocket server = new LocalServerSocket(socketName);
+            LocalSocket video = server.accept();
+            DataOutputStream out = new DataOutputStream(new BufferedOutputStream(video.getOutputStream(), 1 << 16));
+            out.writeBytes("MDK2");
+            out.writeByte(h264 ? 1 : 0);
+            out.flush();
+            LocalSocket control = server.accept();
+            LocalSocket audioSock = audio ? server.accept() : null;
+            server.close();
+            log("PC connected");
+
+            final DataInputStream in = new DataInputStream(new BufferedInputStream(control.getInputStream()));
+            final DataOutputStream ctrlOut = new DataOutputStream(new BufferedOutputStream(control.getOutputStream()));
+            controller.setOutput(ctrlOut);
+            Thread ct = new Thread(new Runnable() {
+                @Override public void run() {
+                    try { controller.loop(in); } catch (IOException e) { /* PC went away */ }
+                    running = false;
+                }
+            }, "control");
+            ct.setDaemon(true);
+            ct.start();
+            controller.startClipboardWatch();
+
+            if (audioSock != null) AudioCapture.startThread(new DataOutputStream(new BufferedOutputStream(audioSock.getOutputStream(), 1 << 14)));
+
+            if (h264) {
+                try { streamH264(capture, out, maxSize, fps, bitrate); }
+                catch (IOException e) { throw e; }
+                catch (Exception e) {
+                    log("ERROR: H.264 encoder failed: " + e);
+                    throw e;
+                }
+            } else {
+                streamJpeg(capture, out, maxSize, quality, fps);
+            }
+        } catch (IOException e) {
+            // PC disconnected
+        } catch (Throwable t) {
+            log("ERROR: " + t);
+            t.printStackTrace();
+        } finally {
+            capture.release();
+            controller.restore();
+            log("Engine stopped");
+            System.exit(0);
+        }
+    }
+
+    static void writeHeader(DataOutputStream out, int len, Capture c, long pts, int flags) throws IOException {
+        out.writeInt(len);
+        out.writeInt(c.deviceWidth);
+        out.writeInt(c.deviceHeight);
+        out.writeInt(c.width);
+        out.writeInt(c.height);
+        out.writeLong(pts);
+        out.writeByte(flags);
+    }
+
+    // ------------------------------------------------------------ H.264
+    static void streamH264(Capture capture, DataOutputStream out, int maxSize, int fps, int bitrate) throws Exception {
+        MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+        while (running) {
+            capture.measure(maxSize, 8);
+            MediaFormat f = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, capture.width, capture.height);
+            f.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+            f.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
+            f.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
+            f.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 10);
+            f.setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100000);   // us: keep frames coming on a still screen
+            f.setFloat("max-fps-to-encoder", fps);
+            f.setInteger(MediaFormat.KEY_PRIORITY, 0);                         // realtime
+            MediaCodec codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
+            codec.configure(f, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            Surface surface = codec.createInputSurface();
+            capture.attach(surface);
+            codec.start();
+            long lastCheck = 0;
+            boolean restart = false;
+            try {
+                while (running && !restart) {
+                    long now = System.nanoTime();
+                    if (now - lastCheck > 400000000L) {
+                        lastCheck = now;
+                        if (capture.displayChanged()) { restart = true; break; }
+                    }
+                    if (keyFrameRequested) {
+                        // A still screen produces no frames, so a sync-frame request alone may never be answered.
+                        // Restarting the encoder always sends fresh setup data plus a keyframe straight away.
+                        keyFrameRequested = false;
+                        restart = true;
+                        break;
+                    }
+                    int idx = codec.dequeueOutputBuffer(info, 50000);
+                    if (idx < 0) continue;
+                    ByteBuffer buf = codec.getOutputBuffer(idx);
+                    if (info.size > 0 && buf != null) {
+                        int flags = 0;
+                        if ((info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) flags |= 1;
+                        if ((info.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0) flags |= 2;
+                        byte[] data = new byte[info.size];
+                        buf.position(info.offset);
+                        buf.get(data, 0, info.size);
+                        synchronized (videoLock) {
+                            writeHeader(out, data.length, capture, info.presentationTimeUs, flags);
+                            out.write(data);
+                            out.flush();
+                        }
+                    }
+                    codec.releaseOutputBuffer(idx, false);
+                }
+            } finally {
+                try { codec.stop(); } catch (Exception ignored) { }
+                codec.release();
+                capture.release();
+                surface.release();
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ JPEG (fallback)
+    static void streamJpeg(Capture capture, DataOutputStream out, int maxSize, int quality, int fps) throws Exception {
+        long frameNs = 1000000000L / Math.max(1, fps);
+        ByteArrayOutputStream jpeg = new ByteArrayOutputStream(1 << 18);
+        while (running) {
+            capture.measure(maxSize, 2);
+            ImageReader reader = ImageReader.newInstance(capture.width, capture.height, PixelFormat.RGBA_8888, 2);
+            capture.attach(reader.getSurface());
+            Bitmap bmp = null;
+            ByteBuffer copy = null;
+            long lastSent = 0, lastCheck = 0;
+            try {
+                while (running) {
+                    long now = System.nanoTime();
+                    if (now - lastCheck > 400000000L) { lastCheck = now; if (capture.displayChanged()) break; }
+                    long wait = lastSent + frameNs - now;
+                    if (wait > 0) Thread.sleep(wait / 1000000L, (int) (wait % 1000000L));
+                    Image img = reader.acquireLatestImage();
+                    if (img == null) { Thread.sleep(4); continue; }
+                    int w = img.getWidth(), h = img.getHeight();
+                    Image.Plane plane = img.getPlanes()[0];
+                    int stride = plane.getRowStride() / plane.getPixelStride();
+                    ByteBuffer buf = plane.getBuffer();
+                    int need = stride * h * 4;
+                    if (buf.remaining() < need) {
+                        if (copy == null || copy.capacity() < need) copy = ByteBuffer.allocateDirect(need);
+                        copy.clear(); copy.put(buf); copy.position(0);
+                        buf = copy;
+                    }
+                    if (bmp == null || bmp.getWidth() != stride || bmp.getHeight() != h)
+                        bmp = Bitmap.createBitmap(stride, h, Bitmap.Config.ARGB_8888);
+                    bmp.copyPixelsFromBuffer(buf);
+                    img.close();
+                    Bitmap frame = stride == w ? bmp : Bitmap.createBitmap(bmp, 0, 0, w, h);
+                    jpeg.reset();
+                    frame.compress(Bitmap.CompressFormat.JPEG, quality, jpeg);
+                    if (frame != bmp) frame.recycle();
+                    synchronized (videoLock) {
+                        writeHeader(out, jpeg.size(), capture, System.nanoTime() / 1000, 2);
+                        jpeg.writeTo(out);
+                        out.flush();
+                    }
+                    lastSent = System.nanoTime();
+                }
+            } finally {
+                capture.release();
+                reader.close();
+            }
+        }
+    }
+
+    static int arg(String[] a, int i, int def) {
+        try { return a.length > i ? Integer.parseInt(a[i]) : def; } catch (NumberFormatException e) { return def; }
+    }
+
+    static void log(String s) {
+        System.out.println(s);
+        System.out.flush();
+    }
+}
