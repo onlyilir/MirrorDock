@@ -55,6 +55,7 @@ namespace MirrorDock
             if (s.Opts.Borderless) FormBorderStyle = FormBorderStyle.None;
             HandleCreated += (o, e) => Native.DarkTitleBar(Handle);
             Shown += (o, e) => { if (s.Opts.Fullscreen) ToggleFullscreen(); };
+            Activated += (o, e) => main.ActiveSession = s;   // game controllers follow the mirror you use
         }
 
         public void StartReading()

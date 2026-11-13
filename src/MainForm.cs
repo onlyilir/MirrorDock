@@ -12,7 +12,7 @@ namespace MirrorDock
 {
     class MainForm : Form
     {
-        public const string Version = "1.0.2";
+        public const string Version = "1.1.0";
 
         readonly AppSettings settings = AppSettings.Load();
         readonly Dictionary<string, MirrorSession> sessions = new Dictionary<string, MirrorSession>();
@@ -28,7 +28,8 @@ namespace MirrorDock
         ListBox deviceList;
         TextBox ipBox;
         ComboBox profileBox, cSize, cBitrate, cFps;
-        CheckBox kAudio, kCompat, kOnTop, kFull, kBorderless, kToolbar, kReconnect, kUpdates;
+        CheckBox kAudio, kCompat, kOnTop, kFull, kBorderless, kToolbar, kReconnect, kUpdates, kWifiStart, kNotify, kPad;
+        ComboBox cWifiOff;
         CheckBox kScreenOff, kAwake, kTouches, kPowerOff, kViewOnly, kStartup;
         Button startBtn, logBtn;
         Label statusLabel, emptyHint;
@@ -74,7 +75,11 @@ namespace MirrorDock
 
             refreshTimer.Interval = 3000;
             refreshTimer.Tick += (s, e) => RefreshDevices();
-            Shown += (s, e) => { RefreshDevices(); refreshTimer.Start(); CheckForUpdates(); };
+            Shown += (s, e) => { ReconnectWifiPhones(); RefreshDevices(); refreshTimer.Start(); CheckForUpdates(); };
+            Gamepad.Start(() => ActiveSession);
+            var wifiTimer = new Timer { Interval = 60000 };
+            wifiTimer.Tick += (s, e) => WifiAutoOff();
+            wifiTimer.Start();
             HandleCreated += (s, e) => { Native.DarkTitleBar(Handle); Native.AddClipboardFormatListener(Handle); };
         }
 
@@ -87,7 +92,7 @@ namespace MirrorDock
         // ------------------------------------------------------------ layout
         void BuildUi()
         {
-            ClientSize = new Size(900, 640);
+            ClientSize = new Size(900, 668);
 
             var logo = new PictureBox { Image = Theme.Logo(64), SizeMode = PictureBoxSizeMode.Zoom, Bounds = new Rectangle(18, 14, 34, 34) };
             Controls.Add(logo);
@@ -117,7 +122,7 @@ namespace MirrorDock
             Controls.Add(help);
 
             // ---- phones column
-            var phones = new CardPanel("Phones") { Bounds = new Rectangle(16, 64, 290, 486) };
+            var phones = new CardPanel("Phones") { Bounds = new Rectangle(16, 64, 290, 514) };
             Controls.Add(phones);
             deviceList = new ListBox();
             deviceList.BorderStyle = BorderStyle.None;
@@ -175,6 +180,12 @@ namespace MirrorDock
             phones.Controls.Add(pair); phones.Controls.Add(disc);
             var hint = Theme.MakeLabel("Double-click to rename. Right-click for more.", Theme.Small, Theme.Sub);
             hint.BackColor = Theme.Card; hint.Location = new Point(12, 448); phones.Controls.Add(hint);
+            var wl = Theme.MakeLabel("Turn off Wi-Fi debugging after", Theme.Small, Theme.Sub); wl.BackColor = Theme.Card; wl.Location = new Point(12, 480); phones.Controls.Add(wl);
+            cWifiOff = Theme.MakeCombo(false); cWifiOff.Bounds = new Rectangle(180, 476, 98, 28);
+            Theme.Fill(cWifiOff, new[] { new Choice("Never", "0"), new Choice("15 min idle", "15"), new Choice("30 min idle", "30"), new Choice("1 hour idle", "60"), new Choice("3 hours idle", "180") }, settings.Get("WifiAutoOff", "30"));
+            cWifiOff.SelectedIndexChanged += (s, e) => settings.Set("WifiAutoOff", Theme.Value(cWifiOff));
+            tips.SetToolTip(cWifiOff, "Closes the Wi-Fi debugging port on phones you have not mirrored for this long.");
+            phones.Controls.Add(cWifiOff);
 
             // ---- profile bar
             var pl = Theme.MakeLabel("Profile", Theme.Header, Theme.Text); pl.Location = new Point(322, 72); Controls.Add(pl);
@@ -218,7 +229,7 @@ namespace MirrorDock
             }
 
             // ---- window card
-            var win = new CardPanel("Window & app") { Bounds = new Rectangle(322, 336, 276, 214) };
+            var win = new CardPanel("Window & app") { Bounds = new Rectangle(322, 336, 276, 242) };
             Controls.Add(win);
             kToolbar = Check(win, "Show button bar beside mirror", 40);
             kOnTop = Check(win, "Always on top", 68);
@@ -228,36 +239,43 @@ namespace MirrorDock
             kUpdates = Check(win, "Check GitHub for updates", 180);
             kUpdates.Checked = settings.Get("UpdateCheck", "1") == "1";
             kUpdates.CheckedChanged += (s, e) => settings.Set("UpdateCheck", kUpdates.Checked ? "1" : "0");
+            kWifiStart = Check(win, "Reconnect Wi-Fi phones at start", 208);
+            kWifiStart.Checked = settings.Get("WifiAtStart", "1") == "1";
+            kWifiStart.CheckedChanged += (s, e) => settings.Set("WifiAtStart", kWifiStart.Checked ? "1" : "0");
 
             // ---- phone card
-            var ph = new CardPanel("Phone") { Bounds = new Rectangle(608, 336, 276, 214) };
+            var ph = new CardPanel("Phone") { Bounds = new Rectangle(608, 336, 276, 242) };
             Controls.Add(ph);
             kScreenOff = Check(ph, "Turn phone screen off (saves battery)", 40);
             kAwake = Check(ph, "Keep phone awake while mirroring", 68);
             kTouches = Check(ph, "Show finger touches", 96);
             kPowerOff = Check(ph, "Lock phone when I close the mirror", 124);
             kViewOnly = Check(ph, "View only (PC can't control phone)", 152);
+            kNotify = Check(ph, "Show phone notifications on PC", 180);
+            kPad = Check(ph, "Use PC game controllers on phone", 208);
+            tips.SetToolTip(kPad, "Xbox and other XInput controllers. PlayStation pads work through Steam or DS4Windows.");
 
             foreach (var c in new[] { cSize, cBitrate, cFps })
                 c.SelectedIndexChanged += (s, e) => OptionsChanged();
-            foreach (var k in new[] { kAudio, kCompat, kOnTop, kFull, kBorderless, kToolbar, kReconnect, kScreenOff, kAwake, kTouches, kPowerOff, kViewOnly })
+            foreach (var k in new[] { kNotify, kPad, kAudio, kCompat, kOnTop, kFull, kBorderless, kToolbar, kReconnect, kScreenOff, kAwake, kTouches, kPowerOff, kViewOnly })
                 k.CheckedChanged += (s, e) => OptionsChanged();
 
             // ---- action bar
             startBtn = Theme.MakeButton("Start mirroring", true);
-            startBtn.Bounds = new Rectangle(16, 562, 290, 46);
+            startBtn.Bounds = new Rectangle(16, 590, 290, 46);
             startBtn.Click += (s, e) => ToggleSelected();
             Controls.Add(startBtn);
 
-            var shot = Theme.MakeButton("Screenshot", false); shot.Bounds = new Rectangle(322, 568, 106, 34);
+            var shot = Theme.MakeButton("Screenshot", false); shot.Bounds = new Rectangle(322, 596, 106, 34);
             shot.Click += (s, e) => { Device d = Selected(); if (d != null) TakeScreenshot(d.Serial, NameOf(d)); else Status("Pick a phone first.", true); };
-            var recs = Theme.MakeButton("Recordings", false); recs.Bounds = new Rectangle(434, 568, 106, 34);
+            var recs = Theme.MakeButton("Recordings", false); recs.Bounds = new Rectangle(546, 596, 106, 34);
             recs.Click += (s, e) => OpenFolder(MirrorSession.VideosDir);
-            var shots = Theme.MakeButton("Screenshots", false); shots.Bounds = new Rectangle(546, 568, 106, 34);
-            shots.Click += (s, e) => OpenFolder(MirrorSession.ShotsDir);
-            logBtn = Theme.MakeButton("Show log", false); logBtn.Bounds = new Rectangle(658, 568, 106, 34);
+            var shots = Theme.MakeButton("Phone files", false); shots.Bounds = new Rectangle(434, 596, 106, 34);
+            shots.Click += (s, e) => { Device d = Selected(); if (d != null && d.Ready) BrowseFiles(d); else Status("Pick a connected phone first.", true); };
+            tips.SetToolTip(shots, "Browse the phone storage, copy files to the PC and send files to the phone.");
+            logBtn = Theme.MakeButton("Show log", false); logBtn.Bounds = new Rectangle(658, 596, 106, 34);
             logBtn.Click += (s, e) => ToggleLog();
-            var quit = Theme.MakeButton("Quit", false); quit.Bounds = new Rectangle(770, 568, 114, 34);
+            var quit = Theme.MakeButton("Quit", false); quit.Bounds = new Rectangle(770, 596, 114, 34);
             tips.SetToolTip(quit, "Stop all mirrors and close MirrorDock (closing the window keeps it in the tray).");
             quit.Click += (s, e) => QuitApp();
             Controls.Add(shot); Controls.Add(recs); Controls.Add(shots); Controls.Add(logBtn); Controls.Add(quit);
@@ -265,20 +283,20 @@ namespace MirrorDock
             // ---- footer: status + start with Windows
             statusLabel = Theme.MakeLabel("Ready.", Theme.Small, Theme.Sub);
             statusLabel.AutoSize = false; statusLabel.AutoEllipsis = true;
-            statusLabel.Bounds = new Rectangle(18, 616, 660, 18);
+            statusLabel.Bounds = new Rectangle(18, 644, 660, 18);
             Controls.Add(statusLabel);
             kStartup = Theme.MakeCheck("Start with Windows (in tray)");
             kStartup.Font = Theme.Small; kStartup.ForeColor = Theme.Sub;
-            kStartup.Location = new Point(694, 613);
+            kStartup.Location = new Point(694, 641);
             kStartup.Checked = StartupEnabled();
             kStartup.CheckedChanged += (s, e) => SetStartup(kStartup.Checked);
             Controls.Add(kStartup);
 
             logBox = new TextBox();
             logBox.Multiline = true; logBox.ReadOnly = true; logBox.ScrollBars = ScrollBars.Vertical;
-            logBox.BackColor = Color.FromArgb(14, 15, 19); logBox.ForeColor = Theme.Sub;
+            logBox.BackColor = Theme.LogBg; logBox.ForeColor = Theme.Sub;
             logBox.BorderStyle = BorderStyle.None; logBox.Font = new Font("Consolas", 8.5f);
-            logBox.Bounds = new Rectangle(16, 644, 868, 180);
+            logBox.Bounds = new Rectangle(16, 672, 868, 180);
             logBox.Visible = false;
             Controls.Add(logBox);
         }
@@ -308,6 +326,15 @@ namespace MirrorDock
             m.Items.Add("Report a problem on GitHub", null, (s, e) => OpenUrl(Links.IssuesUrl));
             m.Items.Add("Open log file", null, (s, e) => { try { Process.Start("notepad.exe", "\"" + AppLog.FilePath + "\""); } catch { } });
             m.Items.Add(new ToolStripSeparator());
+            var theme = new ToolStripMenuItem("Theme");
+            string cur = settings.Get("Theme", "system");
+            foreach (var t in new[] { new[] { "system", "Match Windows" }, new[] { "dark", "Dark" }, new[] { "light", "Light" } })
+            {
+                string mode = t[0];
+                theme.DropDownItems.Add(new ToolStripMenuItem(t[1], null, (s, e) => SetTheme(mode)) { Checked = cur == mode });
+            }
+            m.Items.Add(theme);
+            m.Items.Add("Open screenshots folder", null, (s, e) => OpenFolder(MirrorSession.ShotsDir));
             m.Items.Add("Change adb folder...", null, (s, e) => PickAdbFolder());
             m.Items.Add("Check for updates now", null, (s, e) => CheckForUpdates(true));
             m.Items.Add("MirrorDock on GitHub", null, (s, e) => OpenUrl(Links.RepoUrl));
@@ -318,6 +345,22 @@ namespace MirrorDock
 
         static void OpenUrl(string url) { try { Process.Start(url); } catch { } }
 
+        void SetTheme(string mode)
+        {
+            if (settings.Get("Theme", "system") == mode) return;
+            settings.Set("Theme", mode);
+            if (MessageBox.Show(this, "Restart MirrorDock now to switch the theme?", "MirrorDock", MessageBoxButtons.YesNo) != DialogResult.Yes)
+            {
+                Status("The new theme applies the next time MirrorDock starts.", false);
+                return;
+            }
+            foreach (var s in sessions.Values.ToList()) s.Stop();
+            Process.Start(Application.ExecutablePath, "--restarted");
+            quitting = true;
+            tray.Visible = false;
+            Application.Exit();
+        }
+
         // ------------------------------------------------------------ options
         static readonly Dictionary<string, string> JpegQualityFor = new Dictionary<string, string> { { "3", "55" }, { "8", "75" }, { "12", "82" }, { "16", "88" }, { "24", "95" } };
 
@@ -326,7 +369,7 @@ namespace MirrorDock
             var o = new Options();
             o.MaxSize = Theme.Value(cSize); o.BitRate = Theme.Value(cBitrate); o.MaxFps = Theme.Value(cFps);
             string q; o.Quality = JpegQualityFor.TryGetValue(o.BitRate, out q) ? q : "75";
-            o.Audio = kAudio.Checked; o.Codec = kCompat.Checked ? "jpeg" : "h264";
+            o.Audio = kAudio.Checked; o.Notifications = kNotify.Checked; o.Gamepad = kPad.Checked; o.Codec = kCompat.Checked ? "jpeg" : "h264";
             o.OnTop = kOnTop.Checked; o.Fullscreen = kFull.Checked; o.Borderless = kBorderless.Checked;
             o.Toolbar = kToolbar.Checked; o.AutoReconnect = kReconnect.Checked;
             o.ScreenOff = kScreenOff.Checked; o.StayAwake = kAwake.Checked; o.ShowTouches = kTouches.Checked;
@@ -338,7 +381,7 @@ namespace MirrorDock
         {
             loadingUi = true;
             Theme.Select(cSize, o.MaxSize); Theme.Select(cBitrate, o.BitRate); Theme.Select(cFps, o.MaxFps);
-            kAudio.Checked = o.Audio; kCompat.Checked = o.Codec == "jpeg";
+            kAudio.Checked = o.Audio; kNotify.Checked = o.Notifications; kPad.Checked = o.Gamepad; kCompat.Checked = o.Codec == "jpeg";
             kOnTop.Checked = o.OnTop; kFull.Checked = o.Fullscreen; kBorderless.Checked = o.Borderless;
             kToolbar.Checked = o.Toolbar; kReconnect.Checked = o.AutoReconnect;
             kScreenOff.Checked = o.ScreenOff; kAwake.Checked = o.StayAwake; kTouches.Checked = o.ShowTouches;
@@ -523,7 +566,7 @@ namespace MirrorDock
             using (var bg = new SolidBrush(Theme.Card)) g.FillRectangle(bg, r);
             if (sel)
                 using (var path = Theme.Rounded(new RectangleF(r.X + 2, r.Y + 2, r.Width - 4, r.Height - 4), 8 * sc))
-                using (var br = new SolidBrush(Color.FromArgb(42, 50, 66))) g.FillPath(br, path);
+                using (var br = new SolidBrush(Theme.Selected)) g.FillPath(br, path);
 
             MirrorSession s;
             bool live = sessions.TryGetValue(d.Serial, out s) && s.Running;
@@ -562,6 +605,9 @@ namespace MirrorDock
             m.Items.Add(prof);
             m.Items.Add("Screenshot", null, (s, e) => TakeScreenshot(d.Serial, NameOf(d)));
             m.Items.Add("Install APK...", null, (s, e) => InstallApk(d.Serial, this));
+            m.Items.Add("Browse phone files...", null, (s, e) => BrowseFiles(d));
+            m.Items.Add("Open an app in its own window...", null, (s, e) => OpenAppWindow(d));
+            m.Items.Add("Open a second screen (desktop)", null, (s, e) => OpenSecondScreen(d));
             if (!d.IsWifi) m.Items.Add("Make wireless", null, (s, e) => MakeWireless());
             else m.Items.Add("Turn off Wi-Fi debugging (close port)", null, (s, e) => DisconnectSelected());
             m.Items.Add("Forget window position", null, (s, e) => settings.Set("win." + d.Serial, null));
@@ -709,23 +755,26 @@ namespace MirrorDock
             return o ?? ReadOptions();
         }
 
-        public async void StartMirror(string serial, string name, Options o)
+        public async void StartMirror(string serial, string name, Options o, string screenSpec = null)
         {
             if (!File.Exists(Adb.AdbPath)) { Status("adb.exe is missing. Use Help > Change adb folder.", true); return; }
-            if (IsLive(serial)) return;
-            var s = new MirrorSession { Serial = serial, Name = name, Opts = o };
+            if (screenSpec == null && IsLive(serial)) return;
+            var s = new MirrorSession { Serial = serial, Name = name, Opts = o, ScreenSpec = screenSpec };
+            s.PhoneNotification += (ss, app, title, text) => BeginInvokeSafe(() => ShowPhoneNotification(ss, app, title, text));
+            if (screenSpec == null) wifiLastUsed[serial] = DateTime.Now;
             s.Line += (ss, line) => BeginInvokeSafe(() => Log(ss.Name, line));
             s.Ended += (ss, dropped) => BeginInvokeSafe(() => OnEnded(ss, dropped));
             s.PhoneClipboard += (ss, text) => BeginInvokeSafe(() => SetPcClipboard(text));
             s.RecordingChanged += ss => BeginInvokeSafe(() => deviceList.Invalidate());
-            sessions[serial] = s;
+            sessions[s.SessionKey] = s;
+            ActiveSession = s;
             deviceList.Invalidate();
             UpdateStartButton();
             Status("Starting " + name + "...", false);
 
             s.Win = new MirrorWindow(this, s);
             s.Win.Show();
-            try { await s.Start(forceJpeg.Contains(serial)); }
+            try { await s.Start(screenSpec == null && forceJpeg.Contains(serial)); }
             catch (Exception ex)
             {
                 s.LastError = ex.Message;
@@ -748,6 +797,16 @@ namespace MirrorDock
         void OnEnded(MirrorSession s, bool dropped)
         {
             if (s.Bar != null) { s.Bar.Close(); s.Bar = null; }
+            if (ActiveSession == s) ActiveSession = sessions.Values.FirstOrDefault(x => x != s && x.Running);
+            if (!s.IsExtraScreen) wifiLastUsed[s.Serial] = DateTime.Now;
+            if (s.IsExtraScreen)
+            {
+                if (s.Win != null && !s.Win.IsDisposed) s.Win.Close();
+                MirrorSession cur;
+                if (sessions.TryGetValue(s.SessionKey, out cur) && cur == s) sessions.Remove(s.SessionKey);
+                if (s.LastError != null && (DateTime.Now - s.Started).TotalSeconds < 8) Status(s.Name + ": " + s.LastError, true); else Status(s.Name + " closed.", false);
+                return;
+            }
             if (s.Win != null && !s.Win.IsDisposed) s.Win.Close();
             deviceList.Invalidate();
             UpdateStartButton();
@@ -797,6 +856,94 @@ namespace MirrorDock
                 Balloon("Phone lost", s.Name + " didn't come back after 1 minute.", null);
             }
             deviceList.Invalidate();
+        }
+
+        // ------------------------------------------------------------ v1.1: extra screens, files, notifications, Wi-Fi timer
+        public MirrorSession ActiveSession;   // the mirror you used last: it gets the game controllers
+        readonly Dictionary<string, DateTime> wifiLastUsed = new Dictionary<string, DateTime>();
+
+        void BrowseFiles(Device d)
+        {
+            if (!d.Ready) { Status("Connect the phone first.", true); return; }
+            new FileBrowser(d.Serial, NameOf(d)).Show();
+        }
+
+        async Task<int[]> PhoneScreen(string serial)
+        {
+            int w = 1080, h = 2340, dpi = 420;
+            ProcResult r = await Adb.Run("-s " + serial + " shell wm size", 5000);
+            var m = System.Text.RegularExpressions.Regex.Matches(r.Out, @"(\d+)x(\d+)");
+            if (m.Count > 0) { var last = m[m.Count - 1]; w = int.Parse(last.Groups[1].Value); h = int.Parse(last.Groups[2].Value); }
+            r = await Adb.Run("-s " + serial + " shell wm density", 5000);
+            var dm = System.Text.RegularExpressions.Regex.Matches(r.Out, @"density: (\d+)");
+            if (dm.Count > 0) dpi = int.Parse(dm[dm.Count - 1].Groups[1].Value);
+            return new[] { Math.Min(w, h), Math.Max(w, h), dpi };
+        }
+
+        async void OpenAppWindow(Device d)
+        {
+            if (!d.Ready) { Status("Connect the phone first.", true); return; }
+            string pkg, label;
+            using (var p = new AppPicker(d.Serial, NameOf(d)))
+            {
+                if (p.ShowDialog(this) != DialogResult.OK) return;
+                pkg = p.ChosenPackage; label = p.ChosenName;
+            }
+            int[] sc = await PhoneScreen(d.Serial);
+            Options o = OptionsFor(d.Serial).Clone();
+            int max; int.TryParse(o.MaxSize, out max);
+            double f = max > 0 && sc[1] > max ? (double)max / sc[1] : 1.0;
+            int w = (int)(sc[0] * f) / 8 * 8, h = (int)(sc[1] * f) / 8 * 8, dpi = Math.Max(120, (int)(sc[2] * f));
+            o.Audio = false; o.ScreenOff = false; o.Notifications = false; o.Fullscreen = false;
+            StartMirror(d.Serial, NameOf(d) + " - " + label, o, "app:" + w + "x" + h + "/" + dpi + ":" + pkg);
+        }
+
+        void OpenSecondScreen(Device d)
+        {
+            if (!d.Ready) { Status("Connect the phone first.", true); return; }
+            Options o = OptionsFor(d.Serial).Clone();
+            o.Audio = false; o.ScreenOff = false; o.Notifications = false; o.Fullscreen = false;
+            StartMirror(d.Serial, NameOf(d) + " - second screen", o, "desktop:1920x1080/240");
+            Status("Opening a second screen on " + NameOf(d) + ". Its home screen appears in the new window (works best on Android 13+).", false);
+        }
+
+        void ShowPhoneNotification(MirrorSession s, string app, string title, string text)
+        {
+            if (!s.Opts.Notifications) return;
+            string head = string.IsNullOrEmpty(title) ? app : app + ": " + title;
+            if (head.Length > 60) head = head.Substring(0, 59) + "…";
+            if (text.Length > 200) text = text.Substring(0, 199) + "…";
+            Log(s.Name, "Notification - " + app);
+            tray.Tag = "mirror:" + s.SessionKey;
+            tray.ShowBalloonTip(5000, head, string.IsNullOrEmpty(text) ? " " : text, ToolTipIcon.None);
+        }
+
+        // Quietly reconnects phones that were made wireless before (if their Wi-Fi debugging is still on).
+        async void ReconnectWifiPhones()
+        {
+            if (settings.Get("WifiAtStart", "1") != "1") return;
+            foreach (string ip in settings.RecentIps.Take(4))
+            {
+                try { await Adb.Run("connect " + ip, 3000); } catch { }
+            }
+            RefreshDevices();
+        }
+
+        async void WifiAutoOff()
+        {
+            int minutes;
+            if (!int.TryParse(settings.Get("WifiAutoOff", "30"), out minutes) || minutes <= 0) return;
+            foreach (Device d in devices.Where(x => x.IsWifi && x.Ready).ToList())
+            {
+                if (sessions.Values.Any(s => s.Serial == d.Serial && s.Running)) { wifiLastUsed[d.Serial] = DateTime.Now; continue; }
+                DateTime last;
+                if (!wifiLastUsed.TryGetValue(d.Serial, out last)) { wifiLastUsed[d.Serial] = DateTime.Now; continue; }
+                if ((DateTime.Now - last).TotalMinutes < minutes) continue;
+                wifiLastUsed.Remove(d.Serial);
+                bool closed = await Adb.TurnOffWifi(d.Serial);
+                Status("Turned off Wi-Fi debugging on " + NameOf(d) + " after " + minutes + " idle minutes" + (closed ? " (port closed)." : "."), false);
+                RefreshDevices();
+            }
         }
 
         public void ToggleRecording(MirrorSession s)
@@ -933,7 +1080,9 @@ namespace MirrorDock
                 DateTime last;
                 if (DateTime.TryParse(settings.Get("LastUpdateCheck", ""), out last) && (DateTime.Now - last).TotalHours < 20)
                 {
-                    ShowUpdate(settings.Get("UpdateVersion", ""), settings.Get("UpdateUrl", ""));
+                    pendingUpdate = new Updates.Info { Version = settings.Get("UpdateVersion", ""), Url = settings.Get("UpdateUrl", ""),
+                        SetupUrl = settings.Get("UpdateSetupUrl", null), SumsUrl = settings.Get("UpdateSumsUrl", null) };
+                    ShowUpdate();
                     return;
                 }
             }
@@ -941,21 +1090,57 @@ namespace MirrorDock
             settings.Set("LastUpdateCheck", DateTime.Now.ToString("o"));
             settings.Set("UpdateVersion", info == null ? null : info.Version);
             settings.Set("UpdateUrl", info == null ? null : info.Url);
-            if (info != null) { ShowUpdate(info.Version, info.Url); Balloon("MirrorDock " + info.Version + " is out", "Click to download the update.", null); }
+            settings.Set("UpdateSetupUrl", info == null ? null : info.SetupUrl);
+            settings.Set("UpdateSumsUrl", info == null ? null : info.SumsUrl);
+            pendingUpdate = info;
+            if (info != null) { ShowUpdate(); Balloon("MirrorDock " + info.Version + " is out", "Click to update.", null); }
             else if (manual) Status("You have the latest version (" + Version + ").", false);
         }
 
-        void ShowUpdate(string version, string url)
+        Updates.Info pendingUpdate;
+        bool updating;
+
+        void ShowUpdate()
         {
-            if (string.IsNullOrEmpty(version) || !Updates.Newer(version, Version)) { updateLink.Visible = false; return; }
-            updateLink.Text = "⬆ Update available: v" + version;
+            Updates.Info u = pendingUpdate;
+            if (u == null || string.IsNullOrEmpty(u.Version) || !Updates.Newer(u.Version, Version)) { updateLink.Visible = false; return; }
+            updateLink.Text = "⬆ Update to v" + u.Version;
             updateLink.Visible = true;
             updateLink.Click -= UpdateClick;
-            updateLink.Tag = url;
             updateLink.Click += UpdateClick;
         }
 
-        void UpdateClick(object sender, EventArgs e) { OpenUrl(updateLink.Tag as string ?? Links.RepoUrl + "/releases/latest"); }
+        static bool IsInstalledCopy
+        {
+            get { return Path.GetDirectoryName(Application.ExecutablePath).TrimEnd('\\').Equals(InstallInfo.InstallDir.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase); }
+        }
+
+        // One click: download the new installer, check its SHA-256, install silently and reopen MirrorDock.
+        async void UpdateClick(object sender, EventArgs e)
+        {
+            Updates.Info u = pendingUpdate;
+            if (u == null || updating) return;
+            if (!IsInstalledCopy || u.SetupUrl == null) { OpenUrl(string.IsNullOrEmpty(u.Url) ? Links.RepoUrl + "/releases/latest" : u.Url); return; }
+            if (MessageBox.Show(this, "Update MirrorDock to version " + u.Version + " now?\r\n\r\nMirrors will close, then MirrorDock reopens by itself in a few seconds.",
+                "Update MirrorDock", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            updating = true;
+            try
+            {
+                string setup = await Updates.Download(u, p => BeginInvokeSafe(() => Status("Downloading update... " + p + "%", false)));
+                Status("Installing update...", false);
+                foreach (var s in sessions.Values.ToList()) s.Stop();
+                await Task.Delay(700);
+                Process.Start(new ProcessStartInfo(setup, "/S --relaunch") { UseShellExecute = true });
+                quitting = true;
+                tray.Visible = false;
+                Application.Exit();
+            }
+            catch (Exception ex)
+            {
+                updating = false;
+                Status("Update failed: " + ex.Message + " You can download it from GitHub instead.", true);
+            }
+        }
 
         // ------------------------------------------------------------ status, log, tray
         public void Status(string text, bool warn)
@@ -1000,6 +1185,12 @@ namespace MirrorDock
             {
                 var path = tray.Tag as string;
                 if (path == null) { if (updateLink.Visible) UpdateClick(null, null); else ShowMain(); return; }
+                if (path.StartsWith("mirror:"))
+                {   // a phone notification: bring its mirror forward
+                    MirrorSession ms;
+                    if (sessions.TryGetValue(path.Substring(7), out ms) && ms.Win != null && !ms.Win.IsDisposed) { ms.Win.Show(); ms.Win.Activate(); }
+                    return;
+                }
                 try { Process.Start("explorer.exe", "/select,\"" + path + "\""); } catch { }
             };
             RebuildTrayMenu();

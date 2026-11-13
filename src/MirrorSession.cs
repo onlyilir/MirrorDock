@@ -27,6 +27,9 @@ namespace MirrorDock
         public event Action<MirrorSession, string> Line;
         public event Action<MirrorSession, bool> Ended;        // bool = dropped unexpectedly
         public event Action<MirrorSession, string> PhoneClipboard;
+        public string ScreenSpec;     // null = mirror the phone; "app:WxH/dpi:pkg" or "desktop:WxH/dpi" = its own screen
+        public string SessionKey { get { return ScreenSpec == null ? Serial : Serial + "#" + ScreenSpec; } }
+        public bool IsExtraScreen { get { return ScreenSpec != null; } }
         public event Action<MirrorSession> RecordingChanged;
 
         Process engine;
@@ -64,10 +67,9 @@ namespace MirrorDock
         public async Task Start(bool forceJpeg)
         {
             Started = DateTime.Now;
-            string jar = ExtractEngine();
             Say("Sending engine to phone...");
-            ProcResult r = await Adb.Run("-s " + Serial + " push \"" + jar + "\" " + RemoteJar, 30000);
-            if (r.Code != 0) throw new Exception(Friendly(r.All));
+            await PushEngine(Serial);
+            ProcResult r;
 
             socketName = "mirrordock_" + Guid.NewGuid().ToString("N").Substring(0, 8);
             port = 27200 + new Random().Next(0, 700);
@@ -81,7 +83,8 @@ namespace MirrorDock
             string codec = forceJpeg || Opts.Codec == "jpeg" ? "jpeg" : "h264";
             string args = "-s " + Serial + " shell CLASSPATH=" + RemoteJar + " app_process / com.mirrordock.Server " +
                           socketName + " " + Opts.MaxSize + " " + Opts.Quality + " " + Opts.MaxFps + " " + codec + " " +
-                          Opts.BitRate + " " + (AudioOn ? "1" : "0");
+                          Opts.BitRate + " " + (AudioOn ? "1" : "0") + " " + (ScreenSpec ?? "none") + " " +
+                          (Opts.Notifications && ScreenSpec == null ? "1" : "0");
             engine = Process.Start(Adb.Hidden(Adb.AdbPath, args));
             engine.EnableRaisingEvents = true;
             engine.OutputDataReceived += (s, e) => EngineLine(e.Data);
@@ -91,6 +94,13 @@ namespace MirrorDock
 
             await Task.Run(() => ConnectSockets());
             Say("Connected (" + (H264 ? "H.264" : "JPEG") + (AudioOn ? ", sound on" : "") + ").");
+        }
+
+        public static async Task PushEngine(string serial)
+        {
+            string jar = ExtractEngine();
+            ProcResult r = await Adb.Run("-s " + serial + " push \"" + jar + "\" " + RemoteJar, 30000);
+            if (r.Code != 0) throw new Exception(Friendly(r.All));
         }
 
         static string ExtractEngine()
@@ -366,19 +376,50 @@ namespace MirrorDock
                 while (!Stopping)
                 {
                     ReadFully(st, type, 1);
-                    if (type[0] != 1) break;
-                    ReadFully(st, lenBuf, 4);
-                    int n = BE(lenBuf, 0);
-                    if (n < 0 || n > 8000000) break;
-                    var b = new byte[n];
-                    ReadFully(st, b, n);
-                    string text = Encoding.UTF8.GetString(b);
-                    lastFromPhone = text;
-                    if (PhoneClipboard != null) PhoneClipboard(this, text);
+                    if (type[0] == 1)
+                    {
+                        string text = ReadString(st, lenBuf);
+                        lastFromPhone = text;
+                        if (PhoneClipboard != null) PhoneClipboard(this, text);
+                    }
+                    else if (type[0] == 2)
+                    {
+                        string pkg = ReadString(st, lenBuf), app = ReadString(st, lenBuf), title = ReadString(st, lenBuf), text = ReadString(st, lenBuf);
+                        if (PhoneNotification != null) PhoneNotification(this, app, title, text);
+                    }
+                    else break;
                 }
             }
             catch (Exception) { }
         }
+
+        static string ReadString(Stream st, byte[] lenBuf)
+        {
+            ReadFully(st, lenBuf, 4);
+            int n = BE(lenBuf, 0);
+            if (n < 0 || n > 8000000) throw new IOException("bad message");
+            var b = new byte[n];
+            ReadFully(st, b, n);
+            return Encoding.UTF8.GetString(b);
+        }
+
+        public event Action<MirrorSession, string, string, string> PhoneNotification;  // app, title, text
+
+        // ------------------------------------------------------------ game controllers (virtual Xbox pads on the phone)
+        readonly bool[] padCreated = new bool[4];
+
+        public void GamepadState(int idx, bool connected, byte[] report13)
+        {
+            if (idx < 0 || idx > 3 || Opts.ViewOnly) return;
+            if (!connected) { if (padCreated[idx]) { padCreated[idx] = false; Send(new byte[] { 11, (byte)idx }); } return; }
+            if (!padCreated[idx]) { padCreated[idx] = true; Send(new byte[] { 9, (byte)idx }); }
+            var b = new byte[15];
+            b[0] = 10; b[1] = (byte)idx;
+            Buffer.BlockCopy(report13, 0, b, 2, 13);
+            Send(b);
+        }
+
+        public void ReleaseGamepads() { for (int i = 0; i < 4; i++) GamepadState(i, false, null); }
 
         string lastFromPhone;
 

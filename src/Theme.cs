@@ -14,18 +14,47 @@ namespace MirrorDock
 
     static class Theme
     {
-        public static readonly Color Bg = Color.FromArgb(22, 24, 29);
-        public static readonly Color Card = Color.FromArgb(31, 35, 43);
-        public static readonly Color Field = Color.FromArgb(40, 45, 55);
-        public static readonly Color Border = Color.FromArgb(52, 58, 70);
-        public static readonly Color Hover = Color.FromArgb(50, 57, 70);
-        public static readonly Color Text = Color.FromArgb(230, 232, 236);
-        public static readonly Color Sub = Color.FromArgb(150, 158, 172);
-        public static readonly Color Accent = Color.FromArgb(61, 139, 253);
-        public static readonly Color AccentHover = Color.FromArgb(90, 160, 255);
-        public static readonly Color Green = Color.FromArgb(62, 207, 142);
-        public static readonly Color Amber = Color.FromArgb(240, 180, 60);
-        public static readonly Color Red = Color.FromArgb(229, 72, 77);
+        public static Color Bg = Color.FromArgb(22, 24, 29);
+        public static Color Card = Color.FromArgb(31, 35, 43);
+        public static Color Field = Color.FromArgb(40, 45, 55);
+        public static Color Border = Color.FromArgb(52, 58, 70);
+        public static Color Hover = Color.FromArgb(50, 57, 70);
+        public static Color Text = Color.FromArgb(230, 232, 236);
+        public static Color Sub = Color.FromArgb(150, 158, 172);
+        public static Color Accent = Color.FromArgb(61, 139, 253);
+        public static Color AccentHover = Color.FromArgb(90, 160, 255);
+        public static Color Green = Color.FromArgb(62, 207, 142);
+        public static Color Amber = Color.FromArgb(240, 180, 60);
+        public static Color Red = Color.FromArgb(229, 72, 77);
+        public static Color Selected = Color.FromArgb(42, 50, 66);
+        public static Color LogBg = Color.FromArgb(14, 15, 19);
+        public static bool IsDark = true;
+
+        // Picks dark or light colors before any window is made. mode: "system" (follow Windows), "dark" or "light".
+        public static void Apply(string mode)
+        {
+            bool dark = mode == "dark" || (mode != "light" && WindowsUsesDark());
+            IsDark = dark;
+            if (dark) return;
+            Bg = Color.FromArgb(243, 244, 247); Card = Color.White; Field = Color.FromArgb(234, 237, 242);
+            Border = Color.FromArgb(212, 216, 224); Hover = Color.FromArgb(226, 232, 242); Text = Color.FromArgb(24, 28, 36);
+            Sub = Color.FromArgb(92, 101, 116); Accent = Color.FromArgb(37, 118, 240); AccentHover = Color.FromArgb(60, 135, 250);
+            Green = Color.FromArgb(20, 140, 90); Amber = Color.FromArgb(176, 110, 0); Red = Color.FromArgb(210, 50, 56);
+            Selected = Color.FromArgb(222, 232, 250); LogBg = Color.FromArgb(250, 250, 252);
+        }
+
+        static bool WindowsUsesDark()
+        {
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
+                {
+                    object v = k == null ? null : k.GetValue("AppsUseLightTheme");
+                    return v == null || (int)v == 0;
+                }
+            }
+            catch { return true; }
+        }
 
         public static readonly Font Ui = new Font("Segoe UI", 9.5f);
         public static readonly Font UiBold = new Font("Segoe UI Semibold", 9.5f);

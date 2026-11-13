@@ -17,6 +17,8 @@ namespace MirrorDock
         public string BitRate = "8";        // H.264 Mbps
         public string Codec = "h264";       // h264 | jpeg (compatibility mode)
         public bool Audio = true;
+        public bool Gamepad = true;         // forward PC game controllers to the phone
+        public bool Notifications = true;   // show phone notifications on the PC
         // Window & session
         public bool OnTop = false;
         public bool Fullscreen = false;

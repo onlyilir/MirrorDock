@@ -95,15 +95,63 @@ final class Controller {
                 }
                 case 7: pinch(in.readUnsignedByte(), in.readInt(), in.readInt(), in.readInt(), in.readInt()); break;
                 case 8: Server.keyFrameRequested = true; break;
+                case 9: gamepads.create(in.readUnsignedByte()); break;
+                case 10: {
+                    int idx = in.readUnsignedByte();
+                    byte[] r = new byte[13];
+                    in.readFully(r);
+                    gamepads.report(idx, r);
+                    break;
+                }
+                case 11: gamepads.destroy(in.readUnsignedByte()); break;
                 default: throw new IOException("Unknown message " + type);
             }
         }
     }
 
+    private final Gamepads gamepads = new Gamepads();
+    private volatile int displayId;
+    private volatile Method setDisplay;
+    private int injectLogs;
+
+    void setDisplayId(int id) {
+        displayId = id;
+        if (id != 0 && setDisplay == null) {
+            try { setDisplay = InputEvent.class.getMethod("setDisplayId", int.class); } catch (Exception e) { Server.log("Note: can't target screen " + id); }
+        }
+    }
+
+    /** Sends a message of strings to the PC: byte type, then for one string int len + UTF-8; for several, each the same way. */
+    void sendToPc(int type, String... fields) {
+        if (out == null) return;
+        try {
+            synchronized (out) {
+                out.writeByte(type);
+                for (String f : fields) {
+                    byte[] b = (f == null ? "" : f).getBytes("UTF-8");
+                    out.writeInt(b.length);
+                    out.write(b);
+                }
+                out.flush();
+            }
+        } catch (IOException ignored) { }
+    }
+
     private void injectEvent(InputEvent e) {
         if (inject == null) return;
-        try { inject.invoke(inputManager, e, 0); } catch (Exception ex) { Server.log("inject failed: " + ex); }
+        if (Server.screen != null)
+        {
+            // Own-screen mode: the event must go to that screen. Never let it fall through to the phone's real screen.
+            int id = displayId;
+            if (id == 0 || setDisplay == null) return;
+            try { setDisplay.invoke(e, id); } catch (Exception ex) { if (injectLogs++ < 3) Server.log("ERROR: can't aim input at screen " + id + ": " + ex); return; }
+        }
+        try {
+            Object ok = inject.invoke(inputManager, e, 0);
+            if (Boolean.FALSE.equals(ok) && injectLogs++ < 5) Server.log("Note: phone ignored an input event (" + e.getClass().getSimpleName() + ", display " + displayId + ")");
+        } catch (Exception ex) { Server.log("inject failed: " + ex); }
     }
+
 
     private static MotionEvent.PointerProperties props(int id, int tool) {
         MotionEvent.PointerProperties p = new MotionEvent.PointerProperties();
@@ -236,15 +284,7 @@ final class Controller {
         String s = getClipboard();
         if (s == null || s.equals(lastClip)) return;
         lastClip = s;
-        try {
-            byte[] b = s.getBytes("UTF-8");
-            synchronized (out) {
-                out.writeByte(1);
-                out.writeInt(b.length);
-                out.write(b);
-                out.flush();
-            }
-        } catch (IOException ignored) { }
+        sendToPc(1, s);
     }
 
     // ---- screen off while mirroring ----
@@ -278,6 +318,7 @@ final class Controller {
     }
 
     void restore() {
+        gamepads.destroyAll();
         if (screenTurnedOff) { screenTurnedOff = false; setScreenPower(2); }
     }
 }

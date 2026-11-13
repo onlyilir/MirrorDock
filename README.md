@@ -6,7 +6,7 @@
 
 Plug in your phone (or connect over Wi-Fi), click **Start mirroring**, and your phone shows up in a window. Then use your mouse and keyboard on it, hear its sound, record it, and drag files onto it.
 
-**[Download the latest version](https://github.com/onlyilir/MirrorDock/releases/latest)** for Windows 10 or 11.
+**[Download the latest version](https://github.com/onlyilir/MirrorDock/releases/latest)** for Windows 10 or 11. Or, once it's approved there, `winget install onlyilir.MirrorDock`.
 
 <a href="https://buymeacoffee.com/only.ilir"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy me a coffee"></a>
 
@@ -17,6 +17,10 @@ Plug in your phone (or connect over Wi-Fi), click **Start mirroring**, and your 
 - **Mouse and keyboard control:** tap, swipe, scroll, type, Ctrl+drag to pinch-zoom, right-click for Back.
 - **Two-way clipboard.** Copy on the phone and paste on the PC, and the other way round. It also types letters like ë, ç and emoji.
 - **Drag and drop.** Drop an APK to install it, or drop any other file to send it to the phone's Download folder.
+- **Phone file browser:** browse storage, copy to the PC (or drag out), send files, make folders, delete.
+- **Open any app in its own window**, on a separate screen, so you can keep using the phone normally. Or open a whole **second screen** (on Samsung it becomes a DeX-style desktop).
+- **Game controllers:** plug an Xbox or other XInput controller into the PC and the phone sees an Xbox 360 controller (PlayStation pads work through Steam or DS4Windows).
+- **Phone notifications** pop up on the PC while you mirror.
 - **Record to MP4** with sound (F12), and take **screenshots** in one click.
 - **Button bar beside the mirror:** Back, Home, Recents, Volume, Power, Rotate, Notifications, Record, Mute, Paste, Install APK, Screen off, Fullscreen.
 - **Wi-Fi.** Make a USB phone wireless in one click, connect by IP, or pair with a code (Android 11+). One click turns it off again and closes the port ([details](#using-wi-fi-safely)).
@@ -26,6 +30,8 @@ Plug in your phone (or connect over Wi-Fi), click **Start mirroring**, and your 
 - **Auto-reconnect** when the cable or Wi-Fi drops.
 - **Setup guide** that walks you through USB debugging and tells you if your cable only charges.
 - **Tray icon**, start with Windows, several phones at once.
+- **One-click updates:** the app downloads the new version, checks its SHA-256 and installs it for you.
+- **Light and dark theme**, following Windows by default (*Help > Theme*).
 - **Plain-English errors**, plus a *Copy diagnostics* button for bug reports.
 - **Compatibility mode** for PCs that can't decode H.264 (it switches on automatically if needed).
 
@@ -33,8 +39,8 @@ Plug in your phone (or connect over Wi-Fi), click **Start mirroring**, and your 
 
 | File | What it is |
 | --- | --- |
-| `MirrorDock-1.0.2-Setup.exe` | Installer. Adds a Start menu entry, a desktop shortcut and an uninstaller in *Settings > Apps*. No admin rights needed. |
-| `MirrorDock-1.0.2-portable.zip` | Unzip anywhere and run `MirrorDock.exe`. Nothing is installed. |
+| `MirrorDock-1.1.0-Setup.exe` | Installer. Adds a Start menu entry, a desktop shortcut and an uninstaller in *Settings > Apps*. No admin rights needed. |
+| `MirrorDock-1.1.0-portable.zip` | Unzip anywhere and run `MirrorDock.exe`. Nothing is installed. |
 
 <img src="docs/screenshots/installer.png" alt="MirrorDock installer" width="420">
 
@@ -45,7 +51,7 @@ MirrorDock is new and not code-signed (certificates cost hundreds of dollars a y
 You can check that your download matches the release by comparing its SHA-256 hash with `SHA256SUMS.txt` on the release page:
 
 ```
-Get-FileHash .\MirrorDock-1.0.2-Setup.exe -Algorithm SHA256
+Get-FileHash .\MirrorDock-1.1.0-Setup.exe -Algorithm SHA256
 ```
 
 The full source is in this repo, and you can build it yourself (see below).
@@ -64,6 +70,7 @@ MirrorDock's **Help > Setup guide** walks you through this and checks the connec
 **Make wireless** turns on Wi-Fi debugging on your phone. While it is on, the phone listens on port 5555 on your network, and that stays on until the phone restarts, even after you unplug the cable or close MirrorDock.
 
 - When you are done, select the phone and click **Turn off Wi-Fi** (or right-click > *Turn off Wi-Fi debugging*). This switches the phone back to USB-only and closes the port. MirrorDock checks that it really closed.
+- MirrorDock turns Wi-Fi debugging off by itself on phones you haven't mirrored for 30 minutes. You can change this under *Turn off Wi-Fi debugging after* in the Phones panel.
 - When you quit MirrorDock with a Wi-Fi phone still connected, it asks whether to turn Wi-Fi debugging off. Say **Yes**.
 - You can do the same on the phone: *Developer options > Wireless debugging: Off*, or just restart the phone.
 - Only use Wi-Fi mode on networks you trust, such as your home Wi-Fi, never public Wi-Fi. A new PC still has to be approved with the "Allow USB debugging?" prompt on the phone, so never tap Allow for a PC you don't recognize.

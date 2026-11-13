@@ -43,7 +43,7 @@ namespace MirrorDock
 
         public static void DarkTitleBar(IntPtr h)
         {
-            int on = 1;
+            int on = Theme.IsDark ? 1 : 0;
             try { if (DwmSetWindowAttribute(h, 20, ref on, 4) != 0) DwmSetWindowAttribute(h, 19, ref on, 4); } catch { }
         }
 

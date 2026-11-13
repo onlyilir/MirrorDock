@@ -106,7 +106,7 @@ namespace MirrorDock
     // Checks GitHub once a day for a newer release. Sends nothing but a plain request to the GitHub API.
     static class Updates
     {
-        public class Info { public string Version, Url; }
+        public class Info { public string Version, Url, SetupUrl, SumsUrl; }
 
         public static Task<Info> Check()
         {
@@ -126,10 +126,44 @@ namespace MirrorDock
                         Match url = Regex.Match(json, "\"html_url\"\\s*:\\s*\"([^\"]+/releases/tag/[^\"]+)\"");
                         if (!tag.Success) return null;
                         if (!Newer(tag.Groups[1].Value, MainForm.Version)) return null;
-                        return new Info { Version = tag.Groups[1].Value, Url = url.Success ? url.Groups[1].Value : Links.RepoUrl + "/releases/latest" };
+                        Match setup = Regex.Match(json, @"""browser_download_url""\s*:\s*""([^""]+-Setup\.exe)""");
+                        Match sums = Regex.Match(json, @"""browser_download_url""\s*:\s*""([^""]+SHA256SUMS\.txt)""");
+                        return new Info { Version = tag.Groups[1].Value, Url = url.Success ? url.Groups[1].Value : Links.RepoUrl + "/releases/latest",
+                            SetupUrl = setup.Success ? setup.Groups[1].Value : null, SumsUrl = sums.Success ? sums.Groups[1].Value : null };
                     }
                 }
                 catch { return null; }
+            });
+        }
+
+        // Downloads the new installer, checks it against the release's SHA256SUMS.txt, and returns its path.
+        public static Task<string> Download(Info info, Action<int> progress)
+        {
+            return Task.Run(() =>
+            {
+                ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+                string dir = Path.Combine(Path.GetTempPath(), "MirrorDock-update");
+                Directory.CreateDirectory(dir);
+                string file = Path.Combine(dir, Path.GetFileName(new Uri(info.SetupUrl).LocalPath));
+                using (var wc = new WebClient())
+                {
+                    wc.Headers[HttpRequestHeader.UserAgent] = "MirrorDock-updater";
+                    string sums = info.SumsUrl != null ? wc.DownloadString(info.SumsUrl) : null;
+                    wc.DownloadProgressChanged += (s, e) => { if (progress != null) progress(e.ProgressPercentage); };
+                    wc.DownloadFileTaskAsync(info.SetupUrl, file).Wait();
+                    if (sums == null) throw new Exception("The release has no checksum file, so the download can't be verified.");
+                    string want = sums.Split('\n').Select(l => l.Trim()).Where(l => l.EndsWith(Path.GetFileName(file))).Select(l => l.Split(' ')[0]).FirstOrDefault();
+                    string got;
+                    using (var sha = System.Security.Cryptography.SHA256.Create())
+                    using (var fs = File.OpenRead(file))
+                        got = BitConverter.ToString(sha.ComputeHash(fs)).Replace("-", "").ToLowerInvariant();
+                    if (want == null || !want.Equals(got, StringComparison.OrdinalIgnoreCase))
+                    {
+                        File.Delete(file);
+                        throw new Exception("The downloaded installer didn't match its checksum, so it was deleted.");
+                    }
+                }
+                return file;
             });
         }
 

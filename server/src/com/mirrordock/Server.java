@@ -9,7 +9,6 @@ import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
-import android.os.Bundle;
 import android.os.Looper;
 import android.view.Surface;
 
@@ -24,12 +23,15 @@ import java.nio.ByteBuffer;
 /**
  * MirrorDock phone-side engine. Started by the PC through:
  *   adb shell CLASSPATH=/data/local/tmp/mirrordock.jar app_process / com.mirrordock.Server
- *       <socket> <maxSize> <jpegQuality> <fps> <codec h264|jpeg> <bitrateMbps> <audio 0|1>
+ *       <socket> <maxSize> <jpegQuality> <fps> <codec h264|jpeg> <bitrateMbps> <audio 0|1> <screen spec|-> <notifications 0|1>
+ *   ... com.mirrordock.Server --list-apps      (prints APP|package|label lines and exits)
  *
+ * Screen spec: "-" mirrors the phone; "app:WxH/dpi:package" opens one app on its own screen; "desktop:WxH/dpi" a second screen.
  * Sockets, accepted in order: video, control, then audio (only when audio=1).
  * Video (phone -> PC): "MDK2", byte codec (0 jpeg, 1 h264), then packets:
  *   int length, int deviceW, int deviceH, int frameW, int frameH, long ptsUs, byte flags (1 config, 2 keyframe), data
- * Control: PC -> phone input (see Controller); phone -> PC clipboard text: byte 1, int length, UTF-8.
+ * Control: PC -> phone input (see Controller). Phone -> PC: byte 1 clipboard (int len, UTF-8);
+ *   byte 2 notification (4 strings: package, app, title, text; each int len + UTF-8).
  * Audio (phone -> PC): "MDA1", byte status (1 ok, 0 unavailable), then int length + raw PCM s16le 48 kHz stereo.
  */
 public final class Server {
@@ -37,8 +39,13 @@ public final class Server {
     static volatile boolean running = true;
     static volatile boolean keyFrameRequested;
     static final Object videoLock = new Object();
+    static VirtualScreen screen;
 
     public static void main(String[] args) {
+        try { Looper.prepareMainLooper(); } catch (Throwable ignored) { }
+        Workarounds.apply();
+        if (args.length > 0 && args[0].equals("--list-apps")) { VirtualScreen.listApps(); System.exit(0); }
+
         String socketName = args.length > 0 ? args[0] : "mirrordock";
         int maxSize = arg(args, 1, 1280);
         int quality = arg(args, 2, 75);
@@ -46,16 +53,18 @@ public final class Server {
         boolean h264 = args.length <= 4 || !"jpeg".equals(args[4]);
         int bitrate = arg(args, 5, 8) * 1000000;
         boolean audio = arg(args, 6, 0) == 1;
+        try { screen = VirtualScreen.parse(args.length > 7 ? args[7] : "-"); } catch (Exception e) { log("ERROR: bad screen spec"); }
+        boolean notifications = arg(args, 8, 0) == 1;
+        if (screen != null) h264 = true;   // separate screens always use the encoder
 
-        try { Looper.prepareMainLooper(); } catch (Throwable ignored) { }
-        Workarounds.apply();
         log("MirrorDock engine " + Version.NAME + " starting (" + (h264 ? "H.264 " + (bitrate / 1000000) + " Mbps" : "JPEG q" + quality)
-                + ", max " + maxSize + ", " + fps + " fps, audio " + (audio ? "on" : "off") + ")");
+                + ", max " + maxSize + ", " + fps + " fps, audio " + (audio ? "on" : "off")
+                + (screen != null ? ", " + (screen.desktop ? "second screen" : "app " + screen.app) : "") + ")");
 
         final Capture capture = new Capture();
         final Controller controller = new Controller();
         Runtime.getRuntime().addShutdownHook(new Thread() {
-            @Override public void run() { capture.release(); controller.restore(); }
+            @Override public void run() { capture.release(); if (screen != null) screen.release(); controller.restore(); }
         });
 
         try {
@@ -81,12 +90,17 @@ public final class Server {
             }, "control");
             ct.setDaemon(true);
             ct.start();
-            controller.startClipboardWatch();
+            if (screen == null) controller.startClipboardWatch();
+            if (notifications && screen == null) Notifications.startThread(new Notifications.Sink() {
+                @Override public void send(String pkg, String app, String title, String text) {
+                    controller.sendToPc(2, pkg, app, title, text);
+                }
+            });
 
             if (audioSock != null) AudioCapture.startThread(new DataOutputStream(new BufferedOutputStream(audioSock.getOutputStream(), 1 << 14)));
 
             if (h264) {
-                try { streamH264(capture, out, maxSize, fps, bitrate); }
+                try { streamH264(capture, controller, out, maxSize, fps, bitrate); }
                 catch (IOException e) { throw e; }
                 catch (Exception e) {
                     log("ERROR: H.264 encoder failed: " + e);
@@ -102,46 +116,50 @@ public final class Server {
             t.printStackTrace();
         } finally {
             capture.release();
+            if (screen != null) screen.release();
             controller.restore();
             log("Engine stopped");
             System.exit(0);
         }
     }
 
-    static void writeHeader(DataOutputStream out, int len, Capture c, long pts, int flags) throws IOException {
+    static void writeHeader(DataOutputStream out, int len, int dw, int dh, int w, int h, long pts, int flags) throws IOException {
         out.writeInt(len);
-        out.writeInt(c.deviceWidth);
-        out.writeInt(c.deviceHeight);
-        out.writeInt(c.width);
-        out.writeInt(c.height);
+        out.writeInt(dw);
+        out.writeInt(dh);
+        out.writeInt(w);
+        out.writeInt(h);
         out.writeLong(pts);
         out.writeByte(flags);
     }
 
     // ------------------------------------------------------------ H.264
-    static void streamH264(Capture capture, DataOutputStream out, int maxSize, int fps, int bitrate) throws Exception {
+    static void streamH264(Capture capture, Controller controller, DataOutputStream out, int maxSize, int fps, int bitrate) throws Exception {
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
         while (running) {
-            capture.measure(maxSize, 8);
-            MediaFormat f = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, capture.width, capture.height);
+            int w, h, dw, dh;
+            if (screen != null) { w = dw = screen.width; h = dh = screen.height; }
+            else { capture.measure(maxSize, 8); w = capture.width; h = capture.height; dw = capture.deviceWidth; dh = capture.deviceHeight; }
+            MediaFormat f = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h);
             f.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
             f.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
             f.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
             f.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 10);
-            f.setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100000);   // us: keep frames coming on a still screen
+            f.setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100000);
             f.setFloat("max-fps-to-encoder", fps);
-            f.setInteger(MediaFormat.KEY_PRIORITY, 0);                         // realtime
+            f.setInteger(MediaFormat.KEY_PRIORITY, 0);
             MediaCodec codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
             codec.configure(f, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
             Surface surface = codec.createInputSurface();
-            capture.attach(surface);
+            if (screen != null) { screen.attach(surface); controller.setDisplayId(screen.displayId()); }
+            else capture.attach(surface);
             codec.start();
             long lastCheck = 0;
             boolean restart = false;
             try {
                 while (running && !restart) {
                     long now = System.nanoTime();
-                    if (now - lastCheck > 400000000L) {
+                    if (screen == null && now - lastCheck > 400000000L) {
                         lastCheck = now;
                         if (capture.displayChanged()) { restart = true; break; }
                     }
@@ -163,7 +181,7 @@ public final class Server {
                         buf.position(info.offset);
                         buf.get(data, 0, info.size);
                         synchronized (videoLock) {
-                            writeHeader(out, data.length, capture, info.presentationTimeUs, flags);
+                            writeHeader(out, data.length, dw, dh, w, h, info.presentationTimeUs, flags);
                             out.write(data);
                             out.flush();
                         }
@@ -173,7 +191,7 @@ public final class Server {
             } finally {
                 try { codec.stop(); } catch (Exception ignored) { }
                 codec.release();
-                capture.release();
+                if (screen == null) capture.release();
                 surface.release();
             }
         }
@@ -217,7 +235,7 @@ public final class Server {
                     frame.compress(Bitmap.CompressFormat.JPEG, quality, jpeg);
                     if (frame != bmp) frame.recycle();
                     synchronized (videoLock) {
-                        writeHeader(out, jpeg.size(), capture, System.nanoTime() / 1000, 2);
+                        writeHeader(out, jpeg.size(), capture.deviceWidth, capture.deviceHeight, capture.width, capture.height, System.nanoTime() / 1000, 2);
                         jpeg.writeTo(out);
                         out.flush();
                     }

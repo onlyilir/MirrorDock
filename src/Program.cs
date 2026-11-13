@@ -8,8 +8,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyDescription("MirrorDock - mirror and control your Android phone")]
 [assembly: System.Reflection.AssemblyCompany("onlyilir")]
 [assembly: System.Reflection.AssemblyCopyright("Copyright (c) 2026 onlyilir. MIT License.")]
-[assembly: System.Reflection.AssemblyVersion("1.0.2.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.0.2.0")]
+[assembly: System.Reflection.AssemblyVersion("1.1.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.1.0.0")]
 
 namespace MirrorDock
 {
@@ -24,8 +24,16 @@ namespace MirrorDock
             using (var mutex = new Mutex(true, "MirrorDock.SingleInstance", out created))
             using (var showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, "MirrorDock.Show"))
             {
-                if (!created) { showEvent.Set(); return; } // already running: bring it forward
+                if (!created)
+                {
+                    if (!args.Contains("--restarted")) { showEvent.Set(); return; } // already running: bring it forward
+                    // Restarting (e.g. after a theme change): wait for the old copy to exit.
+                    bool got;
+                    try { got = mutex.WaitOne(8000); } catch (AbandonedMutexException) { got = true; }
+                    if (!got) return;
+                }
 
+                Theme.Apply(AppSettings.Load().Get("Theme", "system"));
                 try { Native.SetProcessDPIAware(); } catch { }
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);

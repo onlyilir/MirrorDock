@@ -12,8 +12,8 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("Installs MirrorDock for the current Windows user")]
 [assembly: AssemblyCompany("onlyilir")]
 [assembly: AssemblyCopyright("Copyright (c) 2026 onlyilir. MIT License.")]
-[assembly: AssemblyVersion("1.0.2.0")]
-[assembly: AssemblyFileVersion("1.0.2.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 namespace MirrorDock
 {
@@ -33,7 +33,14 @@ namespace MirrorDock
             try { Native.SetProcessDPIAware(); } catch { }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            if (args.Contains("/S") || args.Contains("--silent")) { Install(true, null); return; }
+            if (args.Contains("/S") || args.Contains("--silent"))
+            {
+                // Silent install (winget, auto-update). Keeps an existing desktop shortcut choice; --relaunch reopens the app.
+                bool hadInstall = File.Exists(Path.Combine(InstallInfo.InstallDir, "MirrorDock.exe"));
+                Install(!hadInstall || File.Exists(InstallInfo.DesktopLink), null);
+                if (args.Contains("--relaunch")) { try { Process.Start(Path.Combine(InstallInfo.InstallDir, "MirrorDock.exe")); } catch { } }
+                return;
+            }
             Application.Run(new SetupForm());
         }
 
