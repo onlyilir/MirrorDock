@@ -8,8 +8,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyDescription("MirrorDock - mirror and control your Android phone")]
 [assembly: System.Reflection.AssemblyCompany("onlyilir")]
 [assembly: System.Reflection.AssemblyCopyright("Copyright (c) 2026 onlyilir. MIT License.")]
-[assembly: System.Reflection.AssemblyVersion("1.0.1.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.0.1.0")]
+[assembly: System.Reflection.AssemblyVersion("1.0.2.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.0.2.0")]
 
 namespace MirrorDock
 {

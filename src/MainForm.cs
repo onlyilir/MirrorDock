@@ -12,7 +12,7 @@ namespace MirrorDock
 {
     class MainForm : Form
     {
-        public const string Version = "1.0.1";
+        public const string Version = "1.0.2";
 
         readonly AppSettings settings = AppSettings.Load();
         readonly Dictionary<string, MirrorSession> sessions = new Dictionary<string, MirrorSession>();
@@ -169,8 +169,9 @@ namespace MirrorDock
             var pair = Theme.MakeButton("Pair with code...", false); pair.Bounds = new Rectangle(12, 400, 130, 32);
             pair.Click += (s, e) => PairDevice();
             tips.SetToolTip(pair, "Android 11+: Settings > Developer options > Wireless debugging > Pair device with pairing code");
-            var disc = Theme.MakeButton("Disconnect", false); disc.Bounds = new Rectangle(148, 400, 130, 32);
+            var disc = Theme.MakeButton("Turn off Wi-Fi", false); disc.Bounds = new Rectangle(148, 400, 130, 32);
             disc.Click += (s, e) => DisconnectSelected();
+            tips.SetToolTip(disc, "Stops Wi-Fi debugging on the selected phone and closes its network port. Plug in USB to use Wi-Fi again.");
             phones.Controls.Add(pair); phones.Controls.Add(disc);
             var hint = Theme.MakeLabel("Double-click to rename. Right-click for more.", Theme.Small, Theme.Sub);
             hint.BackColor = Theme.Card; hint.Location = new Point(12, 448); phones.Controls.Add(hint);
@@ -562,7 +563,7 @@ namespace MirrorDock
             m.Items.Add("Screenshot", null, (s, e) => TakeScreenshot(d.Serial, NameOf(d)));
             m.Items.Add("Install APK...", null, (s, e) => InstallApk(d.Serial, this));
             if (!d.IsWifi) m.Items.Add("Make wireless", null, (s, e) => MakeWireless());
-            else m.Items.Add("Disconnect", null, (s, e) => DisconnectSelected());
+            else m.Items.Add("Turn off Wi-Fi debugging (close port)", null, (s, e) => DisconnectSelected());
             m.Items.Add("Forget window position", null, (s, e) => settings.Set("win." + d.Serial, null));
             m.Items.Add("Copy serial", null, (s, e) => Clipboard.SetText(d.Serial));
             return m;
@@ -645,12 +646,38 @@ namespace MirrorDock
         {
             Device d = Selected();
             if (d == null) return;
-            if (!d.IsWifi) { Status("USB phones disconnect when you unplug them.", false); return; }
+            if (!d.IsWifi)
+            {
+                // A USB phone may still have Wi-Fi debugging open from an earlier "Make wireless": close it too.
+                Status("Turning off Wi-Fi debugging on " + NameOf(d) + "...", false);
+                await Adb.TurnOffWifi(d.Serial);
+                Status("Wi-Fi debugging is off on " + NameOf(d) + ". USB still works.", false);
+                RefreshDevices();
+                return;
+            }
             MirrorSession s;
-            if (sessions.TryGetValue(d.Serial, out s)) s.Stop();
-            await Adb.Disconnect(d.Serial);
-            Status("Disconnected " + NameOf(d) + ".", false);
+            if (sessions.TryGetValue(d.Serial, out s)) { reconnecting.Remove(d.Serial); s.Stop(); await Task.Delay(400); }
+            Status("Turning off Wi-Fi debugging on " + NameOf(d) + "...", false);
+            bool closed = await Adb.TurnOffWifi(d.Serial);
+            Status(closed
+                ? "Wi-Fi debugging is off on " + NameOf(d) + " and its port is closed. To use Wi-Fi again, plug in USB and click Make wireless."
+                : "Disconnected " + NameOf(d) + ". To be sure the port is closed, turn off Developer options > Wireless debugging on the phone (or restart it).", !closed);
             RefreshDevices();
+        }
+
+        // Before quitting: offer to close Wi-Fi debugging on phones that are still reachable over the network.
+        async Task<bool> OfferWifiShutdown()
+        {
+            List<Device> wifi = devices.Where(d => d.IsWifi && d.Ready).ToList();
+            if (wifi.Count == 0) return true;
+            Show();
+            DialogResult r = MessageBox.Show(this,
+                string.Join(", ", wifi.Select(NameOf).ToArray()) + " still accept" + (wifi.Count == 1 ? "s" : "") +
+                " debugging connections over your Wi-Fi.\r\n\r\nTurn Wi-Fi debugging off now? (Recommended. You can turn it back on later with USB + Make wireless.)",
+                "MirrorDock", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            if (r == DialogResult.Cancel) return false;
+            if (r == DialogResult.Yes) foreach (Device d in wifi) await Adb.TurnOffWifi(d.Serial);
+            return true;
         }
 
         // ------------------------------------------------------------ mirroring
@@ -1046,9 +1073,12 @@ namespace MirrorDock
             base.OnFormClosing(e);
         }
 
-        void QuitApp()
+        async void QuitApp()
         {
+            if (quitting) return;
             quitting = true;
+            foreach (var s in sessions.Values.ToList()) s.Stop();
+            if (!await OfferWifiShutdown()) { quitting = false; return; }
             reconnecting.Clear();
             foreach (var s in sessions.Values.ToList()) s.Stop();
             tray.Visible = false;

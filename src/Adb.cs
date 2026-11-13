@@ -131,6 +131,35 @@ namespace MirrorDock
 
         public static Task<ProcResult> Disconnect(string serial) { return Run("disconnect " + serial); }
 
+        // Switches the phone's adb back to USB-only. This closes the network port that "Make wireless" opened
+        // (and stops Android 11+ wireless debugging). Returns true when the port is confirmed closed.
+        public static async Task<bool> TurnOffWifi(string serial)
+        {
+            string host = serial.Contains(":") ? serial.Substring(0, serial.LastIndexOf(':')) : null;
+            int port = 5555;
+            if (host != null) int.TryParse(serial.Substring(serial.LastIndexOf(':') + 1), out port);
+            await Run("-s " + serial + " usb", 8000);
+            if (host != null) await Run("disconnect " + serial, 4000);
+            if (host == null) return true;
+            await Task.Delay(1500);
+            return !await Task.Run(() => PortOpen(host, port));
+        }
+
+        static bool PortOpen(string host, int port)
+        {
+            try
+            {
+                using (var c = new System.Net.Sockets.TcpClient())
+                {
+                    var ar = c.BeginConnect(host, port, null, null);
+                    bool ok = ar.AsyncWaitHandle.WaitOne(2000) && c.Connected;
+                    try { c.EndConnect(ar); } catch { }
+                    return ok;
+                }
+            }
+            catch { return false; }
+        }
+
         public static Task<string> Screenshot(string serial, string file)
         {
             return Task.Run(() =>
