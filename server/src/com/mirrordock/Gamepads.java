@@ -15,7 +15,8 @@ import java.nio.ByteOrder;
 final class Gamepads {
     private static final int UHID_DESTROY = 1, UHID_CREATE2 = 11, UHID_INPUT2 = 12;
     private static final int EVENT_SIZE = 4376;  // sizeof(struct uhid_event)
-    private final FileDescriptor[] fds = new FileDescriptor[4];
+    private final FileDescriptor[] fds = new FileDescriptor[6];   // 0-3 game controllers, 4 mouse, 5 keyboard
+    static final int MOUSE = 4, KEYBOARD = 5;
 
     private static final byte[] DESCRIPTOR = {
             0x05, 0x01, 0x09, 0x05, (byte) 0xA1, 0x01,                  // Generic Desktop, Game Pad, Collection(Application)
@@ -33,8 +34,56 @@ final class Gamepads {
             (byte) 0xC0
     };
 
+    // Mouse: 5 buttons, 16-bit relative X/Y, wheel, horizontal wheel (AC Pan). Report: u8 buttons, s16 dx, s16 dy, s8 wheel, s8 pan.
+    private static final byte[] MOUSE_DESCRIPTOR = {
+            0x05, 0x01, 0x09, 0x02, (byte) 0xA1, 0x01, 0x09, 0x01, (byte) 0xA1, 0x00,
+            0x05, 0x09, 0x19, 0x01, 0x29, 0x05, 0x15, 0x00, 0x25, 0x01, (byte) 0x95, 0x05, 0x75, 0x01, (byte) 0x81, 0x02,
+            (byte) 0x95, 0x01, 0x75, 0x03, (byte) 0x81, 0x01,
+            0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x16, 0x01, (byte) 0x80, 0x26, (byte) 0xFF, 0x7F, 0x75, 0x10, (byte) 0x95, 0x02, (byte) 0x81, 0x06,
+            0x09, 0x38, 0x15, (byte) 0x81, 0x25, 0x7F, 0x75, 0x08, (byte) 0x95, 0x01, (byte) 0x81, 0x06,
+            0x05, 0x0C, 0x0A, 0x38, 0x02, 0x15, (byte) 0x81, 0x25, 0x7F, 0x75, 0x08, (byte) 0x95, 0x01, (byte) 0x81, 0x06,
+            (byte) 0xC0, (byte) 0xC0
+    };
+
+    // Standard (boot) keyboard. Report: u8 modifiers, u8 reserved, 6 key usages.
+    private static final byte[] KEYBOARD_DESCRIPTOR = {
+            0x05, 0x01, 0x09, 0x06, (byte) 0xA1, 0x01,
+            0x05, 0x07, 0x19, (byte) 0xE0, 0x29, (byte) 0xE7, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, (byte) 0x95, 0x08, (byte) 0x81, 0x02,
+            (byte) 0x95, 0x01, 0x75, 0x08, (byte) 0x81, 0x01,
+            (byte) 0x95, 0x05, 0x75, 0x01, 0x05, 0x08, 0x19, 0x01, 0x29, 0x05, (byte) 0x91, 0x02,
+            (byte) 0x95, 0x01, 0x75, 0x03, (byte) 0x91, 0x01,
+            (byte) 0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x25, 0x65, 0x05, 0x07, 0x19, 0x00, 0x29, 0x65, (byte) 0x81, 0x00,
+            (byte) 0xC0
+    };
+
+    // Creates the mouse (slot 4) or keyboard (slot 5). Android then shows its own pointer and treats keys like a real keyboard.
+    synchronized void createInput(int slot) {
+        if (slot != MOUSE && slot != KEYBOARD) return;
+        if (fds[slot] != null) return;
+        try {
+            FileDescriptor fd = Os.open("/dev/uhid", OsConstants.O_RDWR, 0);
+            byte[] d = slot == MOUSE ? MOUSE_DESCRIPTOR : KEYBOARD_DESCRIPTOR;
+            ByteBuffer b = event(UHID_CREATE2);
+            put(b, slot == MOUSE ? "MirrorDock Mouse" : "MirrorDock Keyboard", 128);
+            put(b, "mirrordock/" + slot, 64);
+            put(b, "md" + slot, 64);
+            b.putShort((short) d.length);
+            b.putShort((short) 0x03);
+            b.putInt(0x18D1);                                  // generic vendor id
+            b.putInt(slot == MOUSE ? 0x4D44 : 0x4D4B);
+            b.putInt(0x0100);
+            b.putInt(0);
+            b.put(d);
+            write(fd, b);
+            fds[slot] = fd;
+            Server.log((slot == MOUSE ? "Mouse" : "Keyboard") + " connected to the phone");
+        } catch (Exception e) {
+            Server.log("ERROR: virtual " + (slot == MOUSE ? "mouse" : "keyboard") + " unavailable on this phone: " + e);
+        }
+    }
+
     synchronized void create(int idx) {
-        if (idx < 0 || idx >= fds.length || fds[idx] != null) return;
+        if (idx < 0 || idx > 3 || fds[idx] != null) return;
         try {
             FileDescriptor fd = Os.open("/dev/uhid", OsConstants.O_RDWR, 0);
             ByteBuffer b = event(UHID_CREATE2);
@@ -73,7 +122,7 @@ final class Gamepads {
         try { write(fds[idx], event(UHID_DESTROY)); } catch (Exception ignored) { }
         try { Os.close(fds[idx]); } catch (Exception ignored) { }
         fds[idx] = null;
-        Server.log("Game controller " + (idx + 1) + " disconnected");
+        Server.log(idx == MOUSE ? "Mouse disconnected" : idx == KEYBOARD ? "Keyboard disconnected" : "Game controller " + (idx + 1) + " disconnected");
     }
 
     void destroyAll() { for (int i = 0; i < fds.length; i++) destroy(i); }

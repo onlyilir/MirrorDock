@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+PackageIdentifier: onlyilir.MirrorDock
+PackageVersion: 1.2.0
+InstallerType: exe
+Scope: user
+InstallModes:
+- silent
+- silentWithProgress
+InstallerSwitches:
+  Silent: /S
+  SilentWithProgress: /S
+UpgradeBehavior: install
+ProductCode: MirrorDock
+ReleaseDate: 2026-11-14
+AppsAndFeaturesEntries:
+- DisplayName: MirrorDock
+  Publisher: onlyilir
+  ProductCode: MirrorDock
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/onlyilir/MirrorDock/releases/download/v1.2.0/MirrorDock-1.2.0-Setup.exe
+  InstallerSha256: 715199FFEC5CD9442756A2621C801D52DE75D8AAA1C7CE396B924D95CB813584
+ManifestType: installer
+ManifestVersion: 1.6.0

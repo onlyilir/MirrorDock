@@ -12,9 +12,10 @@ Plug in your phone (or connect over Wi-Fi), click **Start mirroring**, and your 
 
 ## Features
 
-- **Smooth, sharp video.** Hardware H.264 from the phone, decoded by Windows itself, at up to 120 fps.
+- **Smooth, sharp video.** Hardware H.264 from the phone, decoded by Windows itself, at up to 120 fps. Frames are resized off the main thread, so the window stays smooth while you resize it, and it keeps the phone's shape (no black bars). If the connection hiccups, it skips ahead instead of building up delay.
 - **Phone sound on your PC** (Android 11+), with a mute button.
-- **Mouse and keyboard control:** tap, swipe, scroll, type, Ctrl+drag to pinch-zoom, right-click for Back.
+- **Mouse and keyboard control:** tap, swipe, scroll, type, Ctrl+drag to pinch-zoom, right-click for Back. A **real keyboard** mode (keyboard button on the mirror) sends every key like a plugged-in keyboard, for games and shortcuts.
+- **Control mode:** no mirror window at all. Look at the phone itself and use your PC's mouse and keyboard on it, with a real mouse pointer on the phone and zero video lag. *Ctrl+Alt+M* takes control, *Ctrl+Alt* gives it back.
 - **Two-way clipboard.** Copy on the phone and paste on the PC, and the other way round. It also types letters like ë, ç and emoji.
 - **Drag and drop.** Drop an APK to install it, or drop any other file to send it to the phone's Download folder.
 - **Phone file browser:** browse storage, copy to the PC (or drag out), send files, make folders, delete.
@@ -22,7 +23,8 @@ Plug in your phone (or connect over Wi-Fi), click **Start mirroring**, and your 
 - **Game controllers:** plug an Xbox or other XInput controller into the PC and the phone sees an Xbox 360 controller (PlayStation pads work through Steam or DS4Windows).
 - **Phone notifications** pop up on the PC while you mirror.
 - **Record to MP4** with sound (F12), and take **screenshots** in one click.
-- **Button bar beside the mirror:** Back, Home, Recents, Volume, Power, Rotate, Notifications, Record, Mute, Paste, Install APK, Screen off, Fullscreen.
+- **Button bar built into the mirror window:** Back, Home, Recents, Volume, Power, Rotate, Notifications, Screenshot, Record, Mute, real keyboard, Paste, Install APK, Screen off, Fullscreen, with live fps and quality.
+- **Auto quality:** on a slow Wi-Fi the quality drops by itself and comes back when the connection improves.
 - **Wi-Fi.** Make a USB phone wireless in one click, connect by IP, or pair with a code (Android 11+). One click turns it off again and closes the port ([details](#using-wi-fi-safely)).
 - **Turn the phone screen off** while you keep mirroring, to save battery.
 - **Profiles:** Balanced, Gaming, Movie, Sharp (reading), Weak Wi-Fi, Present (view only), or save your own. You can pin a profile to each phone.
@@ -39,8 +41,8 @@ Plug in your phone (or connect over Wi-Fi), click **Start mirroring**, and your 
 
 | File | What it is |
 | --- | --- |
-| `MirrorDock-1.1.0-Setup.exe` | Installer. Adds a Start menu entry, a desktop shortcut and an uninstaller in *Settings > Apps*. No admin rights needed. |
-| `MirrorDock-1.1.0-portable.zip` | Unzip anywhere and run `MirrorDock.exe`. Nothing is installed. |
+| `MirrorDock-1.2.0-Setup.exe` | Installer. Adds a Start menu entry, a desktop shortcut and an uninstaller in *Settings > Apps*. No admin rights needed. |
+| `MirrorDock-1.2.0-portable.zip` | Unzip anywhere and run `MirrorDock.exe`. Nothing is installed. |
 
 <img src="docs/screenshots/installer.png" alt="MirrorDock installer" width="420">
 
@@ -51,7 +53,7 @@ MirrorDock is new and not code-signed (certificates cost hundreds of dollars a y
 You can check that your download matches the release by comparing its SHA-256 hash with `SHA256SUMS.txt` on the release page:
 
 ```
-Get-FileHash .\MirrorDock-1.1.0-Setup.exe -Algorithm SHA256
+Get-FileHash .\MirrorDock-1.2.0-Setup.exe -Algorithm SHA256
 ```
 
 The full source is in this repo, and you can build it yourself (see below).
@@ -88,6 +90,8 @@ MirrorDock's **Help > Setup guide** walks you through this and checks the connec
 | Drop a file | APK: install. Other files: copy to Download |
 | F11 | Fullscreen |
 | F12 | Start / stop recording |
+| Ctrl+Alt+M | Control mode: take control of the phone (no mirror) |
+| Ctrl+Alt | Control mode: give the mouse and keyboard back to Windows |
 
 Screenshots go to `Pictures\MirrorDock` and recordings to `Videos\MirrorDock`.
 

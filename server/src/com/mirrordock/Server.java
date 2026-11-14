@@ -38,6 +38,8 @@ public final class Server {
 
     static volatile boolean running = true;
     static volatile boolean keyFrameRequested;
+    static volatile int requestedBitrate;   // set by the PC (auto quality); 0 = no change
+    static boolean controlOnly;              // "control" mode: no video, only the virtual mouse and keyboard
     static final Object videoLock = new Object();
     static VirtualScreen screen;
 
@@ -53,7 +55,8 @@ public final class Server {
         boolean h264 = args.length <= 4 || !"jpeg".equals(args[4]);
         int bitrate = arg(args, 5, 8) * 1000000;
         boolean audio = arg(args, 6, 0) == 1;
-        try { screen = VirtualScreen.parse(args.length > 7 ? args[7] : "-"); } catch (Exception e) { log("ERROR: bad screen spec"); }
+        controlOnly = args.length > 7 && args[7].equals("control");
+        try { screen = controlOnly ? null : VirtualScreen.parse(args.length > 7 ? args[7] : "-"); } catch (Exception e) { log("ERROR: bad screen spec"); }
         boolean notifications = arg(args, 8, 0) == 1;
         if (screen != null) h264 = true;   // separate screens always use the encoder
 
@@ -99,7 +102,10 @@ public final class Server {
 
             if (audioSock != null) AudioCapture.startThread(new DataOutputStream(new BufferedOutputStream(audioSock.getOutputStream(), 1 << 14)));
 
-            if (h264) {
+            if (controlOnly) {
+                log("Control mode: no video, mouse and keyboard only");
+                while (running) Thread.sleep(200);
+            } else if (h264) {
                 try { streamH264(capture, controller, out, maxSize, fps, bitrate); }
                 catch (IOException e) { throw e; }
                 catch (Exception e) {
@@ -162,6 +168,14 @@ public final class Server {
                     if (screen == null && now - lastCheck > 400000000L) {
                         lastCheck = now;
                         if (capture.displayChanged()) { restart = true; break; }
+                    }
+                    int nb = requestedBitrate;
+                    if (nb > 0) {
+                        requestedBitrate = 0;
+                        bitrate = nb;
+                        android.os.Bundle p = new android.os.Bundle();
+                        p.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, nb);
+                        try { codec.setParameters(p); log("Quality now " + (nb / 100000) / 10.0 + " Mbps"); } catch (Exception e) { log("Note: live quality change not supported"); }
                     }
                     if (keyFrameRequested) {
                         // A still screen produces no frames, so a sync-frame request alone may never be answered.

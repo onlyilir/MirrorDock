@@ -104,6 +104,15 @@ final class Controller {
                     break;
                 }
                 case 11: gamepads.destroy(in.readUnsignedByte()); break;
+                case 12: gamepads.createInput(in.readUnsignedByte()); break;        // 4 = mouse, 5 = keyboard
+                case 13: {                                                            // byte slot, byte length, report
+                    int slot = in.readUnsignedByte();
+                    byte[] r = new byte[in.readUnsignedByte()];
+                    in.readFully(r);
+                    gamepads.report(slot, r);
+                    break;
+                }
+                case 14: Server.requestedBitrate = in.readInt(); break;              // live quality change (bits/s)
                 default: throw new IOException("Unknown message " + type);
             }
         }

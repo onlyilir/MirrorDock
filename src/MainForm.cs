@@ -12,7 +12,7 @@ namespace MirrorDock
 {
     class MainForm : Form
     {
-        public const string Version = "1.1.0";
+        public const string Version = "1.2.0";
 
         readonly AppSettings settings = AppSettings.Load();
         readonly Dictionary<string, MirrorSession> sessions = new Dictionary<string, MirrorSession>();
@@ -28,10 +28,10 @@ namespace MirrorDock
         ListBox deviceList;
         TextBox ipBox;
         ComboBox profileBox, cSize, cBitrate, cFps;
-        CheckBox kAudio, kCompat, kOnTop, kFull, kBorderless, kToolbar, kReconnect, kUpdates, kWifiStart, kNotify, kPad;
+        CheckBox kAutoQ, kAudio, kCompat, kOnTop, kFull, kBorderless, kToolbar, kReconnect, kUpdates, kWifiStart, kNotify, kPad;
         ComboBox cWifiOff;
         CheckBox kScreenOff, kAwake, kTouches, kPowerOff, kViewOnly, kStartup;
-        Button startBtn, logBtn;
+        PillButton startBtn, logBtn;
         Label statusLabel, emptyHint;
         LinkLabel updateLink;
         TextBox logBox;
@@ -77,6 +77,7 @@ namespace MirrorDock
             refreshTimer.Tick += (s, e) => RefreshDevices();
             Shown += (s, e) => { ReconnectWifiPhones(); RefreshDevices(); refreshTimer.Start(); CheckForUpdates(); };
             Gamepad.Start(() => ActiveSession);
+            InputCapture.Changed += () => BeginInvokeSafe(() => deviceList.Invalidate());
             var wifiTimer = new Timer { Interval = 60000 };
             wifiTimer.Tick += (s, e) => WifiAutoOff();
             wifiTimer.Start();
@@ -90,51 +91,70 @@ namespace MirrorDock
         }
 
         // ------------------------------------------------------------ layout
+        PillButton wifiBtn, controlBtn, filesBtn, moreBtn;
+        Label tipLabel;
+        int tipIndex;
+        int hoverDevice = -1;
+
+        static readonly string[] Tips = {
+            "Click and drag on the mirror to tap and swipe. Right-click or Esc is Back, middle-click is Home.",
+            "Hold Ctrl and drag to pinch-zoom maps and photos.",
+            "Drop an APK on the mirror to install it, or any other file to send it to the phone's Download folder.",
+            "F11 toggles fullscreen. F12 starts and stops recording.",
+            "Control mode: use your PC's mouse and keyboard on the phone with no mirror window. Ctrl+Alt+M takes control, Ctrl+Alt gives it back.",
+            "The keyboard button on the mirror's bar switches to a real keyboard for games and shortcuts.",
+            "Right-click a phone for more: open an app in its own window, a second screen, rename, pin a profile.",
+            "Copy text on the phone and paste it on the PC, or the other way round. The clipboard syncs by itself.",
+            "On a slow Wi-Fi, quality drops by itself and comes back when the connection improves.",
+            "Done with Wi-Fi? Turn off Wi-Fi closes the phone's debugging port. MirrorDock also does it after 30 idle minutes." };
+
         void BuildUi()
         {
-            ClientSize = new Size(900, 668);
+            ClientSize = new Size(980, 624);
 
-            var logo = new PictureBox { Image = Theme.Logo(64), SizeMode = PictureBoxSizeMode.Zoom, Bounds = new Rectangle(18, 14, 34, 34) };
+            // ---- header
+            var logo = new PictureBox { Image = Theme.Logo(64), SizeMode = PictureBoxSizeMode.Zoom, Bounds = new Rectangle(18, 14, 36, 36) };
             Controls.Add(logo);
-            var title = Theme.MakeLabel("MirrorDock", Theme.Title, Theme.Text); title.Location = new Point(58, 10); Controls.Add(title);
-            var sub = Theme.MakeLabel("Your phone on your PC  |  v" + Version, Theme.Small, Theme.Sub); sub.Location = new Point(61, 37); Controls.Add(sub);
-
-            updateLink = new LinkLabel { AutoSize = true, Location = new Point(250, 22), Font = Theme.UiBold, Visible = false,
+            var title = Theme.MakeLabel("MirrorDock", Theme.Title, Theme.Text); title.Location = new Point(60, 10); Controls.Add(title);
+            var sub = Theme.MakeLabel("Your phone on your PC  ·  v" + Version, Theme.Small, Theme.Sub); sub.Location = new Point(63, 38); Controls.Add(sub);
+            updateLink = new LinkLabel { AutoSize = true, Location = new Point(260, 24), Font = Theme.UiBold, Visible = false,
                 LinkColor = Theme.Green, ActiveLinkColor = Theme.Green, BackColor = Color.Transparent };
             updateLink.LinkBehavior = LinkBehavior.HoverUnderline;
             Controls.Add(updateLink);
-
-            int hx = 884;
+            int hx = 964;
             if (Links.BuyMeACoffee.Length > 0)
             {
-                var coffee = Theme.MakeButton("☕  Buy me a coffee", false);
-                coffee.BackColor = Color.FromArgb(255, 221, 0); coffee.ForeColor = Color.FromArgb(20, 20, 20);
-                coffee.FlatAppearance.BorderSize = 0; coffee.FlatAppearance.MouseOverBackColor = Color.FromArgb(255, 230, 70);
-                coffee.Font = Theme.UiBold;
-                coffee.Bounds = new Rectangle(hx - 160, 16, 160, 32);
+                var coffee = new PillButton("Buy me a coffee", false) { Glyph = "", Bounds = new Rectangle(hx - 170, 16, 170, 34), Font = Theme.UiBold,
+                    Fill = Color.FromArgb(255, 221, 0), FillHover = Color.FromArgb(255, 232, 80), TextColor = Color.FromArgb(25, 25, 25) };
                 tips.SetToolTip(coffee, "MirrorDock is free. If it helps you, a coffee keeps it going!");
                 coffee.Click += (s, e) => OpenUrl(Links.CoffeeUrl);
                 Controls.Add(coffee);
-                hx -= 168;
+                hx -= 178;
             }
-            var help = Theme.MakeButton("Help", false); help.Bounds = new Rectangle(hx - 80, 16, 80, 32);
-            help.Click += (s, e) => HelpMenu().Show(help, new Point(0, help.Height));
+            var help = new PillButton("Help", false) { Glyph = "", Bounds = new Rectangle(hx - 96, 16, 96, 34) };
+            help.Click += (s, e) => HelpMenu().Show(help, new Point(0, help.Height + 2));
             Controls.Add(help);
 
-            // ---- phones column
-            var phones = new CardPanel("Phones") { Bounds = new Rectangle(16, 64, 290, 514) };
+            // ---- phones (left)
+            var phones = new CardPanel("Your phones") { Bounds = new Rectangle(16, 72, 340, 496) };
             Controls.Add(phones);
+            var refresh = new IconButton("") { Bounds = new Rectangle(296, 6, 34, 32), Font = new Font("Segoe MDL2 Assets", 10f) };
+            refresh.Click += (s, e) => { RefreshDevices(); Status("Looking for phones...", false); };
+            tips.SetToolTip(refresh, "Look for phones again");
+            phones.Controls.Add(refresh);
             deviceList = new ListBox();
             deviceList.BorderStyle = BorderStyle.None;
             deviceList.BackColor = Theme.Card;
             deviceList.ForeColor = Theme.Text;
             deviceList.DrawMode = DrawMode.OwnerDrawFixed;
-            deviceList.ItemHeight = 52;
+            deviceList.ItemHeight = 62;
             deviceList.IntegralHeight = false;
-            deviceList.Bounds = new Rectangle(8, 40, 274, 250);
+            deviceList.Bounds = new Rectangle(8, 42, 324, 218);
             deviceList.DrawItem += DrawDevice;
             deviceList.SelectedIndexChanged += (s, e) => UpdateStartButton();
             deviceList.DoubleClick += (s, e) => RenameDevice();
+            deviceList.MouseMove += (s, e) => { int i = deviceList.IndexFromPoint(e.Location); if (i != hoverDevice) { hoverDevice = i; deviceList.Invalidate(); } };
+            deviceList.MouseLeave += (s, e) => { hoverDevice = -1; deviceList.Invalidate(); };
             deviceList.MouseDown += (s, e) =>
             {
                 if (e.Button != MouseButtons.Right) return;
@@ -142,24 +162,32 @@ namespace MirrorDock
                 if (i >= 0) { deviceList.SelectedIndex = i; DeviceMenu().Show(deviceList, e.Location); }
             };
             phones.Controls.Add(deviceList);
-            emptyHint = Theme.MakeLabel("No phones yet.\r\n\r\nClick Help > Setup guide for a\r\nstep-by-step walkthrough.", Theme.Ui, Theme.Sub);
+            emptyHint = Theme.MakeLabel("No phones yet.\r\n\r\nPlug one in with USB debugging on,\r\nor open Help > Setup guide.", Theme.Ui, Theme.Sub);
             emptyHint.BackColor = Theme.Card;
-            emptyHint.Location = new Point(20, 56);
+            emptyHint.Location = new Point(24, 70);
             phones.Controls.Add(emptyHint);
             emptyHint.BringToFront();
 
-            var refresh = Theme.MakeButton("Refresh", false); refresh.Bounds = new Rectangle(12, 300, 86, 32);
-            refresh.Click += (s, e) => RefreshDevices();
-            var wifi = Theme.MakeButton("Make wireless", false); wifi.Bounds = new Rectangle(104, 300, 174, 32);
-            wifi.Click += (s, e) => MakeWireless();
-            tips.SetToolTip(wifi, "Switch the selected USB phone to Wi-Fi. You can unplug the cable afterwards.");
-            phones.Controls.Add(refresh); phones.Controls.Add(wifi);
+            startBtn = new PillButton("Mirror", true) { Glyph = "", Bounds = new Rectangle(14, 268, 312, 48) };
+            startBtn.Click += (s, e) => ToggleSelected();
+            phones.Controls.Add(startBtn);
+            controlBtn = new PillButton("Control", false) { Glyph = "", Bounds = new Rectangle(14, 324, 100, 36) };
+            controlBtn.Click += (s, e) => { Device d = Selected(); if (d != null) StartControl(d); };
+            tips.SetToolTip(controlBtn, "Control mode: use the PC's mouse and keyboard on the phone, with no mirror window (no lag). Ctrl+Alt gives them back.");
+            filesBtn = new PillButton("Files", false) { Glyph = "", Bounds = new Rectangle(120, 324, 100, 36) };
+            filesBtn.Click += (s, e) => { Device d = Selected(); if (d != null && d.Ready) BrowseFiles(d); else Status("Pick a connected phone first.", true); };
+            tips.SetToolTip(filesBtn, "Browse the phone's storage, copy files to the PC and send files to the phone.");
+            moreBtn = new PillButton("More", false) { Glyph = "", Bounds = new Rectangle(226, 324, 100, 36) };
+            moreBtn.Click += (s, e) => { if (Selected() != null) DeviceMenu().Show(moreBtn, new Point(0, moreBtn.Height + 2)); };
+            tips.SetToolTip(moreBtn, "App in its own window, second screen, screenshot, install APK, rename...");
+            phones.Controls.Add(controlBtn); phones.Controls.Add(filesBtn); phones.Controls.Add(moreBtn);
 
-            var ipLbl = Theme.MakeLabel("Connect over Wi-Fi (IP address)", Theme.Small, Theme.Sub); ipLbl.BackColor = Theme.Card;
-            ipLbl.Location = new Point(12, 342); phones.Controls.Add(ipLbl);
+            phones.Controls.Add(new Panel { BackColor = Theme.Border, Bounds = new Rectangle(14, 376, 312, 1) });
+            var ipLbl = Theme.MakeLabel("Connect over Wi-Fi", Theme.UiBold, Theme.Text); ipLbl.BackColor = Theme.Card;
+            ipLbl.Location = new Point(14, 388); phones.Controls.Add(ipLbl);
             ipBox = new TextBox();
             ipBox.BackColor = Theme.Field; ipBox.ForeColor = Theme.Text; ipBox.BorderStyle = BorderStyle.FixedSingle;
-            ipBox.Font = Theme.Big; ipBox.Bounds = new Rectangle(12, 362, 176, 28);
+            ipBox.Font = Theme.Big; ipBox.Bounds = new Rectangle(14, 414, 196, 30);
             ipBox.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
             ipBox.AutoCompleteSource = AutoCompleteSource.CustomSource;
             ipBox.AutoCompleteCustomSource.AddRange(settings.RecentIps.ToArray());
@@ -167,29 +195,19 @@ namespace MirrorDock
             tips.SetToolTip(ipBox, "Phone's IP, e.g. 192.168.1.20 (recent ones auto-complete)");
             ipBox.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; ConnectIp(); } };
             phones.Controls.Add(ipBox);
-            var connect = Theme.MakeButton("Connect", false); connect.Bounds = new Rectangle(194, 361, 84, 30);
+            var connect = new PillButton("Connect", false) { Bounds = new Rectangle(216, 413, 110, 32) };
             connect.Click += (s, e) => ConnectIp();
             phones.Controls.Add(connect);
-
-            var pair = Theme.MakeButton("Pair with code...", false); pair.Bounds = new Rectangle(12, 400, 130, 32);
+            var pair = new PillButton("Pair with code", false) { Bounds = new Rectangle(14, 452, 150, 32) };
             pair.Click += (s, e) => PairDevice();
             tips.SetToolTip(pair, "Android 11+: Settings > Developer options > Wireless debugging > Pair device with pairing code");
-            var disc = Theme.MakeButton("Turn off Wi-Fi", false); disc.Bounds = new Rectangle(148, 400, 130, 32);
-            disc.Click += (s, e) => DisconnectSelected();
-            tips.SetToolTip(disc, "Stops Wi-Fi debugging on the selected phone and closes its network port. Plug in USB to use Wi-Fi again.");
-            phones.Controls.Add(pair); phones.Controls.Add(disc);
-            var hint = Theme.MakeLabel("Double-click to rename. Right-click for more.", Theme.Small, Theme.Sub);
-            hint.BackColor = Theme.Card; hint.Location = new Point(12, 448); phones.Controls.Add(hint);
-            var wl = Theme.MakeLabel("Turn off Wi-Fi debugging after", Theme.Small, Theme.Sub); wl.BackColor = Theme.Card; wl.Location = new Point(12, 480); phones.Controls.Add(wl);
-            cWifiOff = Theme.MakeCombo(false); cWifiOff.Bounds = new Rectangle(180, 476, 98, 28);
-            Theme.Fill(cWifiOff, new[] { new Choice("Never", "0"), new Choice("15 min idle", "15"), new Choice("30 min idle", "30"), new Choice("1 hour idle", "60"), new Choice("3 hours idle", "180") }, settings.Get("WifiAutoOff", "30"));
-            cWifiOff.SelectedIndexChanged += (s, e) => settings.Set("WifiAutoOff", Theme.Value(cWifiOff));
-            tips.SetToolTip(cWifiOff, "Closes the Wi-Fi debugging port on phones you have not mirrored for this long.");
-            phones.Controls.Add(cWifiOff);
+            wifiBtn = new PillButton("Make wireless", false) { Bounds = new Rectangle(170, 452, 156, 32) };
+            wifiBtn.Click += (s, e) => { Device d = Selected(); if (d != null && d.IsWifi) DisconnectSelected(); else MakeWireless(); };
+            phones.Controls.Add(pair); phones.Controls.Add(wifiBtn);
 
-            // ---- profile bar
-            var pl = Theme.MakeLabel("Profile", Theme.Header, Theme.Text); pl.Location = new Point(322, 72); Controls.Add(pl);
-            profileBox = Theme.MakeCombo(false); profileBox.Bounds = new Rectangle(386, 70, 220, 28);
+            // ---- profile + settings tabs (right)
+            var pl = Theme.MakeLabel("Profile", Theme.Header, Theme.Text); pl.Location = new Point(372, 79); Controls.Add(pl);
+            profileBox = Theme.MakeCombo(false); profileBox.Bounds = new Rectangle(440, 76, 240, 28);
             profileBox.SelectedIndexChanged += (s, e) =>
             {
                 if (loadingUi || profileBox.SelectedItem == null) return;
@@ -198,123 +216,131 @@ namespace MirrorDock
                 if (o != null) { LoadOptions(o); settings.LastProfile = name; Status("Loaded profile \"" + name + "\".", false); }
             };
             Controls.Add(profileBox);
-            var saveP = Theme.MakeButton("Save as...", false); saveP.Bounds = new Rectangle(614, 68, 100, 32);
+            var saveP = new PillButton("Save as...", false) { Bounds = new Rectangle(690, 74, 110, 32) };
             saveP.Click += (s, e) => SaveProfile();
-            var delP = Theme.MakeButton("Delete", false); delP.Bounds = new Rectangle(720, 68, 80, 32);
+            var delP = new PillButton("Delete", false) { Bounds = new Rectangle(806, 74, 90, 32) };
             delP.Click += (s, e) => DeleteProfile();
             Controls.Add(saveP); Controls.Add(delP);
             FillProfiles(settings.LastProfile);
 
-            // ---- picture & sound card
-            var video = new CardPanel("Picture & sound") { Bounds = new Rectangle(322, 112, 276, 214) };
-            Controls.Add(video);
-            cSize = Row(video, "Resolution", Sizes, 42);
-            cBitrate = Row(video, "Quality", Bitrates, 76);
-            cFps = Row(video, "Frame rate", Fpss, 110);
-            kAudio = Check(video, "Play phone sound on PC (Android 11+)", 150);
-            kCompat = Check(video, "Compatibility mode (older PCs)", 178);
-            tips.SetToolTip(kCompat, "Sends pictures instead of video. Use it if the mirror stays black. No recording in this mode.");
-
-            // ---- controls help card
-            var helpCard = new CardPanel("Mouse & keyboard") { Bounds = new Rectangle(608, 112, 276, 214) };
-            Controls.Add(helpCard);
-            string[,] rows = {
-                { "Click / drag", "Tap / swipe" }, { "Ctrl + drag", "Pinch to zoom" }, { "Right-click, Esc", "Back" },
-                { "Middle-click", "Home" }, { "Wheel (+Shift)", "Scroll (sideways)" }, { "Type, Ctrl+V", "Type / paste" },
-                { "Drop a file", "Install APK / send file" }, { "F11 / F12", "Fullscreen / Record" } };
-            for (int i = 0; i < rows.GetLength(0); i++)
+            var tabs = new SegmentTabs("Picture & sound", "Window", "Phone", "Wi-Fi & app") { Bounds = new Rectangle(372, 118, 592, 40) };
+            Controls.Add(tabs);
+            var card = new CardPanel("") { Bounds = new Rectangle(372, 168, 592, 298) };
+            Controls.Add(card);
+            var pages = new Panel[4];
+            for (int i = 0; i < 4; i++)
             {
-                var a = Theme.MakeLabel(rows[i, 0], Theme.Small, Theme.Text); a.BackColor = Theme.Card; a.Location = new Point(14, 40 + i * 21); helpCard.Controls.Add(a);
-                var b = Theme.MakeLabel(rows[i, 1], Theme.Small, Theme.Sub); b.BackColor = Theme.Card; b.Location = new Point(120, 40 + i * 21); helpCard.Controls.Add(b);
+                pages[i] = new Panel { Bounds = new Rectangle(2, 2, 588, 294), BackColor = Theme.Card, Visible = i == 0 };
+                card.Controls.Add(pages[i]);
             }
+            tabs.SelectedChanged += i => { for (int p = 0; p < 4; p++) pages[p].Visible = p == i; };
 
-            // ---- window card
-            var win = new CardPanel("Window & app") { Bounds = new Rectangle(322, 336, 276, 242) };
-            Controls.Add(win);
-            kToolbar = Check(win, "Show button bar beside mirror", 40);
-            kOnTop = Check(win, "Always on top", 68);
-            kFull = Check(win, "Start fullscreen", 96);
-            kBorderless = Check(win, "No window border", 124);
-            kReconnect = Check(win, "Reconnect if the phone drops", 152);
-            kUpdates = Check(win, "Check GitHub for updates", 180);
-            kUpdates.Checked = settings.Get("UpdateCheck", "1") == "1";
-            kUpdates.CheckedChanged += (s, e) => settings.Set("UpdateCheck", kUpdates.Checked ? "1" : "0");
-            kWifiStart = Check(win, "Reconnect Wi-Fi phones at start", 208);
+            // Picture & sound
+            cSize = Pick(pages[0], "Resolution", Sizes, 18, 16);
+            cBitrate = Pick(pages[0], "Quality", Bitrates, 210, 16);
+            cFps = Pick(pages[0], "Frame rate", Fpss, 402, 16);
+            kAudio = Switch(pages[0], "Phone sound on the PC", "Android 11 and newer", 0, -1);
+            kAutoQ = Switch(pages[0], "Auto quality", "Adjusts to slow Wi-Fi by itself", 1, -1);
+            kCompat = Switch(pages[0], "Compatibility mode", "If the mirror stays black", 0, 0);
+            // Window
+            kToolbar = Switch(pages[1], "Button bar on the mirror", "Back, Home, record, keyboard and more", 0, -2);
+            kOnTop = Switch(pages[1], "Always on top", null, 1, -2);
+            kFull = Switch(pages[1], "Start fullscreen", "F11 switches any time", 0, -1);
+            kBorderless = Switch(pages[1], "No window border", null, 1, -1);
+            kReconnect = Switch(pages[1], "Reconnect if the phone drops", null, 0, 0);
+            // Phone
+            kScreenOff = Switch(pages[2], "Turn phone screen off", "Saves battery while you mirror", 0, -2);
+            kAwake = Switch(pages[2], "Keep phone awake", null, 1, -2);
+            kTouches = Switch(pages[2], "Show finger touches", null, 0, -1);
+            kPowerOff = Switch(pages[2], "Lock phone when closing", null, 1, -1);
+            kNotify = Switch(pages[2], "Phone notifications on PC", null, 0, 0);
+            kPad = Switch(pages[2], "PC game controllers", "Xbox / XInput pads show up on the phone", 1, 0);
+            kViewOnly = Switch(pages[2], "View only", "The PC can't control the phone", 0, 1);
+            // Wi-Fi & app
+            var wl = Theme.MakeLabel("Turn off Wi-Fi debugging after", Theme.Ui, Theme.Text); wl.BackColor = Theme.Card; wl.Location = new Point(18, 26); pages[3].Controls.Add(wl);
+            cWifiOff = Theme.MakeCombo(false); cWifiOff.Bounds = new Rectangle(250, 22, 150, 28);
+            Theme.Fill(cWifiOff, new[] { new Choice("Never", "0"), new Choice("15 min idle", "15"), new Choice("30 min idle", "30"), new Choice("1 hour idle", "60"), new Choice("3 hours idle", "180") }, settings.Get("WifiAutoOff", "30"));
+            cWifiOff.SelectedIndexChanged += (s, e) => settings.Set("WifiAutoOff", Theme.Value(cWifiOff));
+            tips.SetToolTip(cWifiOff, "Closes the Wi-Fi debugging port on phones you haven't mirrored for this long.");
+            pages[3].Controls.Add(cWifiOff);
+            kWifiStart = Switch(pages[3], "Reconnect Wi-Fi phones at start", null, 0, -1);
             kWifiStart.Checked = settings.Get("WifiAtStart", "1") == "1";
             kWifiStart.CheckedChanged += (s, e) => settings.Set("WifiAtStart", kWifiStart.Checked ? "1" : "0");
-
-            // ---- phone card
-            var ph = new CardPanel("Phone") { Bounds = new Rectangle(608, 336, 276, 242) };
-            Controls.Add(ph);
-            kScreenOff = Check(ph, "Turn phone screen off (saves battery)", 40);
-            kAwake = Check(ph, "Keep phone awake while mirroring", 68);
-            kTouches = Check(ph, "Show finger touches", 96);
-            kPowerOff = Check(ph, "Lock phone when I close the mirror", 124);
-            kViewOnly = Check(ph, "View only (PC can't control phone)", 152);
-            kNotify = Check(ph, "Show phone notifications on PC", 180);
-            kPad = Check(ph, "Use PC game controllers on phone", 208);
-            tips.SetToolTip(kPad, "Xbox and other XInput controllers. PlayStation pads work through Steam or DS4Windows.");
+            kUpdates = Switch(pages[3], "Check GitHub for updates", "Once a day, one-click install", 1, -1);
+            kUpdates.Checked = settings.Get("UpdateCheck", "1") == "1";
+            kUpdates.CheckedChanged += (s, e) => settings.Set("UpdateCheck", kUpdates.Checked ? "1" : "0");
+            kStartup = Switch(pages[3], "Start with Windows", "Opens quietly in the tray", 0, 0);
+            kStartup.Checked = StartupEnabled();
+            kStartup.CheckedChanged += (s, e) => SetStartup(kStartup.Checked);
 
             foreach (var c in new[] { cSize, cBitrate, cFps })
                 c.SelectedIndexChanged += (s, e) => OptionsChanged();
-            foreach (var k in new[] { kNotify, kPad, kAudio, kCompat, kOnTop, kFull, kBorderless, kToolbar, kReconnect, kScreenOff, kAwake, kTouches, kPowerOff, kViewOnly })
+            foreach (var k in new[] { kNotify, kPad, kAudio, kAutoQ, kCompat, kOnTop, kFull, kBorderless, kToolbar, kReconnect, kScreenOff, kAwake, kTouches, kPowerOff, kViewOnly })
                 k.CheckedChanged += (s, e) => OptionsChanged();
 
-            // ---- action bar
-            startBtn = Theme.MakeButton("Start mirroring", true);
-            startBtn.Bounds = new Rectangle(16, 590, 290, 46);
-            startBtn.Click += (s, e) => ToggleSelected();
-            Controls.Add(startBtn);
+            // ---- tips card
+            var tipCard = new CardPanel("") { Bounds = new Rectangle(372, 476, 592, 92), Cursor = Cursors.Hand };
+            Controls.Add(tipCard);
+            var bulb = Theme.MakeLabel("", new Font("Segoe MDL2 Assets", 18f), Theme.Amber); bulb.BackColor = Theme.Card; bulb.Location = new Point(18, 28);
+            tipCard.Controls.Add(bulb);
+            var tipTitle = Theme.MakeLabel("Tip", Theme.UiBold, Theme.Text); tipTitle.BackColor = Theme.Card; tipTitle.Location = new Point(60, 14);
+            tipCard.Controls.Add(tipTitle);
+            tipLabel = new Label { AutoSize = false, Bounds = new Rectangle(60, 36, 470, 48), Font = Theme.Ui, ForeColor = Theme.Sub, BackColor = Theme.Card, Cursor = Cursors.Hand };
+            tipCard.Controls.Add(tipLabel);
+            var next = new IconButton("") { Bounds = new Rectangle(540, 28, 38, 36), Font = new Font("Segoe MDL2 Assets", 11f) };
+            tips.SetToolTip(next, "Next tip");
+            tipCard.Controls.Add(next);
+            EventHandler nextTip = (s, e) => { tipIndex = (tipIndex + 1) % Tips.Length; tipLabel.Text = Tips[tipIndex]; };
+            next.Click += nextTip; tipLabel.Click += nextTip; tipCard.Click += nextTip;
+            tipIndex = new Random().Next(Tips.Length);
+            tipLabel.Text = Tips[tipIndex];
+            var tipTimer = new Timer { Interval = 12000 };
+            tipTimer.Tick += nextTip;
+            tipTimer.Start();
 
-            var shot = Theme.MakeButton("Screenshot", false); shot.Bounds = new Rectangle(322, 596, 106, 34);
-            shot.Click += (s, e) => { Device d = Selected(); if (d != null) TakeScreenshot(d.Serial, NameOf(d)); else Status("Pick a phone first.", true); };
-            var recs = Theme.MakeButton("Recordings", false); recs.Bounds = new Rectangle(546, 596, 106, 34);
-            recs.Click += (s, e) => OpenFolder(MirrorSession.VideosDir);
-            var shots = Theme.MakeButton("Phone files", false); shots.Bounds = new Rectangle(434, 596, 106, 34);
-            shots.Click += (s, e) => { Device d = Selected(); if (d != null && d.Ready) BrowseFiles(d); else Status("Pick a connected phone first.", true); };
-            tips.SetToolTip(shots, "Browse the phone storage, copy files to the PC and send files to the phone.");
-            logBtn = Theme.MakeButton("Show log", false); logBtn.Bounds = new Rectangle(658, 596, 106, 34);
-            logBtn.Click += (s, e) => ToggleLog();
-            var quit = Theme.MakeButton("Quit", false); quit.Bounds = new Rectangle(770, 596, 114, 34);
-            tips.SetToolTip(quit, "Stop all mirrors and close MirrorDock (closing the window keeps it in the tray).");
-            quit.Click += (s, e) => QuitApp();
-            Controls.Add(shot); Controls.Add(recs); Controls.Add(shots); Controls.Add(logBtn); Controls.Add(quit);
-
-            // ---- footer: status + start with Windows
+            // ---- bottom bar
             statusLabel = Theme.MakeLabel("Ready.", Theme.Small, Theme.Sub);
             statusLabel.AutoSize = false; statusLabel.AutoEllipsis = true;
-            statusLabel.Bounds = new Rectangle(18, 644, 660, 18);
+            statusLabel.Bounds = new Rectangle(18, 588, 480, 20);
             Controls.Add(statusLabel);
-            kStartup = Theme.MakeCheck("Start with Windows (in tray)");
-            kStartup.Font = Theme.Small; kStartup.ForeColor = Theme.Sub;
-            kStartup.Location = new Point(694, 641);
-            kStartup.Checked = StartupEnabled();
-            kStartup.CheckedChanged += (s, e) => SetStartup(kStartup.Checked);
-            Controls.Add(kStartup);
+            int bx = 964;
+            var quit = new PillButton("Quit", false) { Bounds = new Rectangle(bx - 80, 580, 80, 32) };
+            tips.SetToolTip(quit, "Stop all mirrors and close MirrorDock (closing the window keeps it in the tray).");
+            quit.Click += (s, e) => QuitApp();
+            logBtn = new PillButton("Log", false) { Glyph = "", Bounds = new Rectangle(bx - 168, 580, 82, 32) };
+            logBtn.Click += (s, e) => ToggleLog();
+            var recs = new PillButton("Recordings", false) { Glyph = "", Bounds = new Rectangle(bx - 300, 580, 126, 32) };
+            recs.Click += (s, e) => OpenFolder(MirrorSession.VideosDir);
+            var shot = new PillButton("Screenshot", false) { Glyph = "", Bounds = new Rectangle(bx - 432, 580, 126, 32) };
+            shot.Click += (s, e) => { Device d = Selected(); if (d != null) TakeScreenshot(d.Serial, NameOf(d)); else Status("Pick a phone first.", true); };
+            Controls.Add(shot); Controls.Add(recs); Controls.Add(logBtn); Controls.Add(quit);
 
             logBox = new TextBox();
             logBox.Multiline = true; logBox.ReadOnly = true; logBox.ScrollBars = ScrollBars.Vertical;
             logBox.BackColor = Theme.LogBg; logBox.ForeColor = Theme.Sub;
             logBox.BorderStyle = BorderStyle.None; logBox.Font = new Font("Consolas", 8.5f);
-            logBox.Bounds = new Rectangle(16, 672, 868, 180);
+            logBox.Bounds = new Rectangle(16, 628, 948, 180);
             logBox.Visible = false;
             Controls.Add(logBox);
         }
 
-        ComboBox Row(Panel card, string label, Choice[] items, int y)
+        // A labelled dropdown placed in a settings page (label above the box).
+        ComboBox Pick(Panel page, string label, Choice[] items, int x, int y)
         {
-            var l = Theme.MakeLabel(label, Theme.Ui, Theme.Sub); l.BackColor = Theme.Card;
-            l.Location = new Point(14, y + 4); card.Controls.Add(l);
-            var c = Theme.MakeCombo(false); c.Bounds = new Rectangle(96, y, 166, 28);
+            var l = Theme.MakeLabel(label, Theme.Small, Theme.Sub); l.BackColor = Theme.Card;
+            l.Location = new Point(x, y); page.Controls.Add(l);
+            var c = Theme.MakeCombo(false); c.Bounds = new Rectangle(x, y + 20, 174, 28);
             Theme.Fill(c, items, items[0].Value);
-            card.Controls.Add(c);
+            page.Controls.Add(c);
             return c;
         }
 
-        CheckBox Check(Panel card, string text, int y)
+        // An on/off switch in a two-column grid. Rows count from the bottom area: row 0 = middle, -2 = top.
+        CheckBox Switch(Panel page, string text, string hint, int col, int row)
         {
-            var k = Theme.MakeCheck(text); k.BackColor = Theme.Card;
-            k.Location = new Point(14, y); card.Controls.Add(k);
+            var k = new ToggleSwitch(text) { Hint = hint, BackColor = Theme.Card };
+            k.Bounds = new Rectangle(18 + col * 290, 150 + row * 56, 270, 44);
+            page.Controls.Add(k);
             return k;
         }
 
@@ -369,7 +395,7 @@ namespace MirrorDock
             var o = new Options();
             o.MaxSize = Theme.Value(cSize); o.BitRate = Theme.Value(cBitrate); o.MaxFps = Theme.Value(cFps);
             string q; o.Quality = JpegQualityFor.TryGetValue(o.BitRate, out q) ? q : "75";
-            o.Audio = kAudio.Checked; o.Notifications = kNotify.Checked; o.Gamepad = kPad.Checked; o.Codec = kCompat.Checked ? "jpeg" : "h264";
+            o.Audio = kAudio.Checked; o.AutoQuality = kAutoQ.Checked; o.Notifications = kNotify.Checked; o.Gamepad = kPad.Checked; o.Codec = kCompat.Checked ? "jpeg" : "h264";
             o.OnTop = kOnTop.Checked; o.Fullscreen = kFull.Checked; o.Borderless = kBorderless.Checked;
             o.Toolbar = kToolbar.Checked; o.AutoReconnect = kReconnect.Checked;
             o.ScreenOff = kScreenOff.Checked; o.StayAwake = kAwake.Checked; o.ShowTouches = kTouches.Checked;
@@ -381,7 +407,7 @@ namespace MirrorDock
         {
             loadingUi = true;
             Theme.Select(cSize, o.MaxSize); Theme.Select(cBitrate, o.BitRate); Theme.Select(cFps, o.MaxFps);
-            kAudio.Checked = o.Audio; kNotify.Checked = o.Notifications; kPad.Checked = o.Gamepad; kCompat.Checked = o.Codec == "jpeg";
+            kAudio.Checked = o.Audio; kAutoQ.Checked = o.AutoQuality; kNotify.Checked = o.Notifications; kPad.Checked = o.Gamepad; kCompat.Checked = o.Codec == "jpeg";
             kOnTop.Checked = o.OnTop; kFull.Checked = o.Fullscreen; kBorderless.Checked = o.Borderless;
             kToolbar.Checked = o.Toolbar; kReconnect.Checked = o.AutoReconnect;
             kScreenOff.Checked = o.ScreenOff; kAwake.Checked = o.StayAwake; kTouches.Checked = o.ShowTouches;
@@ -562,29 +588,49 @@ namespace MirrorDock
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             float sc = g.DpiX / 96f;
             bool sel = (e.State & DrawItemState.Selected) != 0;
+            bool hov = e.Index == hoverDevice;
             Rectangle r = e.Bounds;
             using (var bg = new SolidBrush(Theme.Card)) g.FillRectangle(bg, r);
-            if (sel)
-                using (var path = Theme.Rounded(new RectangleF(r.X + 2, r.Y + 2, r.Width - 4, r.Height - 4), 8 * sc))
-                using (var br = new SolidBrush(Theme.Selected)) g.FillPath(br, path);
+            if (sel || hov)
+                using (var path = Theme.Rounded(new RectangleF(r.X + 3, r.Y + 3, r.Width - 6, r.Height - 6), 10 * sc))
+                {
+                    using (var br = new SolidBrush(sel ? Theme.Selected : Theme.Field)) g.FillPath(br, path);
+                    if (sel) using (var pen = new Pen(Color.FromArgb(120, Theme.Accent), 1.5f)) g.DrawPath(pen, path);
+                }
 
             MirrorSession s;
             bool live = sessions.TryGetValue(d.Serial, out s) && s.Running;
+            MirrorSession ctl;
+            bool controlling = sessions.TryGetValue(d.Serial + "#control", out ctl) && ctl.Running;
             bool recon = reconnecting.Contains(d.Serial);
-            Color dot = live ? (s.Recording ? Theme.Red : Theme.Green) : recon ? Theme.Amber : d.Ready ? Theme.Sub : Theme.Amber;
-            using (var br = new SolidBrush(dot)) g.FillEllipse(br, r.X + 12 * sc, r.Y + r.Height / 2f - 5 * sc, 10 * sc, 10 * sc);
+            Color state = live ? (s.Recording ? Theme.Red : Theme.Green) : controlling ? Theme.Accent : recon || !d.Ready ? Theme.Amber : Theme.Sub;
 
-            string link = d.IsWifi ? "Wi-Fi" : "USB";
+            // phone icon in a soft circle, tinted by state
+            float ix = r.X + 12 * sc, iy = r.Y + r.Height / 2f - 19 * sc, isz = 38 * sc;
+            using (var br = new SolidBrush(Color.FromArgb(live || controlling ? 60 : 35, state))) g.FillEllipse(br, ix, iy, isz, isz);
+            using (var f = new Font("Segoe MDL2 Assets", 13f))
+                TextRenderer.DrawText(g, "", f, new Rectangle((int)ix, (int)iy, (int)isz, (int)isz), live || controlling ? state : Theme.Text, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+
             string prof = settings.PhoneProfile(d.Serial);
-            string line2 = link + "  |  " + (prof.Length > 0 ? "Profile: " + prof : d.Serial);
-            if (live) line2 = (s.Recording ? "Recording" : "Mirroring") + "  |  " + link + (s.H264 ? "" : "  |  compat");
+            string line2 = prof.Length > 0 ? "Profile: " + prof : (d.Model.Length > 0 && NameOf(d) != d.Model ? d.Model : "Ready");
+            if (live) line2 = (s.Recording ? "Recording" : "Mirroring") + (s.H264 ? "" : " (compatibility)");
+            else if (controlling) line2 = InputCapture.IsTarget(ctl) ? "Controlling with mouse + keyboard" : "Control mode";
             else if (recon) line2 = "Reconnecting...";
             else if (d.State == "unauthorized") line2 = "Tap Allow on the phone";
             else if (d.State == "offline") line2 = "Offline - replug or reconnect";
-            TextRenderer.DrawText(g, NameOf(d), Theme.UiBold, new Rectangle((int)(r.X + 32 * sc), r.Y + (int)(7 * sc), r.Width - (int)(40 * sc), (int)(20 * sc)),
+            int tx = (int)(r.X + 60 * sc);
+            TextRenderer.DrawText(g, NameOf(d), Theme.UiBold, new Rectangle(tx, r.Y + (int)(12 * sc), r.Width - tx - (int)(70 * sc), (int)(20 * sc)),
                 Theme.Text, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            TextRenderer.DrawText(g, line2, Theme.Small, new Rectangle((int)(r.X + 32 * sc), r.Y + (int)(27 * sc), r.Width - (int)(40 * sc), (int)(18 * sc)),
-                live ? (s.Recording ? Theme.Red : Theme.Green) : Theme.Sub, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            TextRenderer.DrawText(g, line2, Theme.Small, new Rectangle(tx, r.Y + (int)(33 * sc), r.Width - tx - (int)(12 * sc), (int)(18 * sc)),
+                live || controlling ? state : Theme.Sub, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+
+            // connection pill on the right
+            string link = d.IsWifi ? "Wi-Fi" : "USB";
+            Size ps = TextRenderer.MeasureText(link, Theme.Small);
+            var pill = new RectangleF(r.Right - ps.Width - 22 * sc, r.Y + 12 * sc, ps.Width + 12 * sc, 20 * sc);
+            using (var path = Theme.Rounded(pill, 10 * sc))
+            using (var br = new SolidBrush(d.IsWifi ? Color.FromArgb(45, Theme.Accent) : Theme.Field)) g.FillPath(br, path);
+            TextRenderer.DrawText(g, link, Theme.Small, Rectangle.Round(pill), d.IsWifi ? Theme.Accent : Theme.Sub, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
 
         ContextMenuStrip DeviceMenu()
@@ -593,6 +639,10 @@ namespace MirrorDock
             Device d = Selected();
             if (d == null) return m;
             m.Items.Add(IsLive(d.Serial) ? "Stop mirroring" : "Start mirroring", null, (s, e) => ToggleSelected());
+            m.Items.Add("Control with mouse && keyboard (no mirror)", null, (s, e) => StartControl(d));
+            m.Items.Add("Open an app in its own window...", null, (s, e) => OpenAppWindow(d));
+            m.Items.Add("Open a second screen (desktop)", null, (s, e) => OpenSecondScreen(d));
+            m.Items.Add(new ToolStripSeparator());
             m.Items.Add("Rename...", null, (s, e) => RenameDevice());
             var prof = new ToolStripMenuItem("Always use profile");
             string cur = settings.PhoneProfile(d.Serial);
@@ -606,8 +656,6 @@ namespace MirrorDock
             m.Items.Add("Screenshot", null, (s, e) => TakeScreenshot(d.Serial, NameOf(d)));
             m.Items.Add("Install APK...", null, (s, e) => InstallApk(d.Serial, this));
             m.Items.Add("Browse phone files...", null, (s, e) => BrowseFiles(d));
-            m.Items.Add("Open an app in its own window...", null, (s, e) => OpenAppWindow(d));
-            m.Items.Add("Open a second screen (desktop)", null, (s, e) => OpenSecondScreen(d));
             if (!d.IsWifi) m.Items.Add("Make wireless", null, (s, e) => MakeWireless());
             else m.Items.Add("Turn off Wi-Fi debugging (close port)", null, (s, e) => DisconnectSelected());
             m.Items.Add("Forget window position", null, (s, e) => settings.Set("win." + d.Serial, null));
@@ -731,10 +779,29 @@ namespace MirrorDock
         {
             Device d = Selected();
             bool live = d != null && IsLive(d.Serial);
-            startBtn.Text = live ? "Stop mirroring" : d == null ? "Start mirroring" : "Start mirroring " + Shorten(NameOf(d), 14);
+            startBtn.Text = live ? "Stop mirroring" : d == null ? "Mirror" : "Mirror " + Shorten(NameOf(d), 18);
+            startBtn.Glyph = live ? "" : "";
             startBtn.Enabled = d != null && (live || d.Ready);
-            if (live) Theme.SetPrimaryColor(startBtn, Theme.Red, Color.FromArgb(240, 100, 105));
-            else Theme.SetPrimaryColor(startBtn, Theme.Accent, Theme.AccentHover);
+            startBtn.Fill = live ? (Color?)Theme.Red : null;
+            startBtn.FillHover = live ? (Color?)Color.FromArgb(240, 100, 105) : null;
+            startBtn.Invalidate();
+            bool ready = d != null && d.Ready;
+            controlBtn.Enabled = ready; filesBtn.Enabled = ready; moreBtn.Enabled = d != null;
+            wifiBtn.Text = d != null && d.IsWifi ? "Turn off Wi-Fi" : "Make wireless";
+            tips.SetToolTip(wifiBtn, d != null && d.IsWifi
+                ? "Stops Wi-Fi debugging on this phone and closes its network port. Plug in USB to use Wi-Fi again."
+                : "Switch the selected USB phone to Wi-Fi. You can unplug the cable afterwards.");
+        }
+
+        // Control mode: no mirror, the PC's mouse and keyboard work the phone directly.
+        void StartControl(Device d)
+        {
+            if (!d.Ready) { Status("Connect the phone first.", true); return; }
+            MirrorSession cur;
+            if (sessions.TryGetValue(d.Serial + "#control", out cur) && cur.Running) { if (cur.Bar != null) cur.Bar.Activate(); return; }
+            Options o = OptionsFor(d.Serial).Clone();
+            o.Audio = false; o.ScreenOff = false; o.Notifications = false; o.ViewOnly = false;
+            StartMirror(d.Serial, NameOf(d), o, "control");
         }
 
         static string Shorten(string s, int n) { return s.Length <= n ? s : s.Substring(0, n - 1) + "…"; }
@@ -772,8 +839,8 @@ namespace MirrorDock
             UpdateStartButton();
             Status("Starting " + name + "...", false);
 
-            s.Win = new MirrorWindow(this, s);
-            s.Win.Show();
+            if (s.IsControl) { s.Bar = new ControlBar(s); s.Bar.Show(); }   // control mode: no mirror window
+            else { s.Win = new MirrorWindow(this, s); s.Win.Show(); }
             try { await s.Start(screenSpec == null && forceJpeg.Contains(serial)); }
             catch (Exception ex)
             {
@@ -782,13 +849,14 @@ namespace MirrorDock
                 return;
             }
             if (s.Stopping) return;
-            s.Win.StartReading();
-            if (o.ScreenOff && !o.ViewOnly) { await Task.Delay(1200); s.ScreenPower(false); }
-            if (o.Toolbar)
+            if (s.IsControl)
             {
-                s.Bar = new ToolbarForm(this, s);
-                s.Bar.StartFollowing();
+                Status(name + ": control mode is on. Use the bar at the top of the screen (or Ctrl+Alt+M) to take control.", false);
+                deviceList.Invalidate();
+                return;
             }
+            s.Win.StartReading();   // the window also shows its built-in button bar
+            if (o.ScreenOff && !o.ViewOnly) { await Task.Delay(1200); s.ScreenPower(false); }
             Status(name + " is mirroring" + (s.H264 ? "" : " (compatibility mode)") + ".", false);
             deviceList.Invalidate();
             UpdateStartButton();
@@ -1160,7 +1228,7 @@ namespace MirrorDock
         void ToggleLog()
         {
             logBox.Visible = !logBox.Visible;
-            logBtn.Text = logBox.Visible ? "Hide log" : "Show log";
+            logBtn.Text = logBox.Visible ? "Hide" : "Log";
             int extra = (int)(196 * DeviceDpiScale());
             ClientSize = new Size(ClientSize.Width, logBox.Visible ? baseHeight + extra : baseHeight);
         }

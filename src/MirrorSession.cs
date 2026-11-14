@@ -16,7 +16,7 @@ namespace MirrorDock
         public string Serial, Name;
         public Options Opts;
         public MirrorWindow Win;
-        public ToolbarForm Bar;
+        public System.Windows.Forms.Form Bar;   // control mode bar (mirror windows have their button bar built in)
         public int DevW, DevH;
         public DateTime Started;
         public string LastError;
@@ -30,6 +30,9 @@ namespace MirrorDock
         public string ScreenSpec;     // null = mirror the phone; "app:WxH/dpi:pkg" or "desktop:WxH/dpi" = its own screen
         public string SessionKey { get { return ScreenSpec == null ? Serial : Serial + "#" + ScreenSpec; } }
         public bool IsExtraScreen { get { return ScreenSpec != null; } }
+        public bool IsControl { get { return ScreenSpec == "control"; } }   // control mode: no video, the phone gets a mouse + keyboard
+        public bool RealKeyboard;          // mirror window sends keys as a real keyboard (games, shortcuts)
+        public double CurrentMbps;         // shown in the button bar; changes with auto quality
         public event Action<MirrorSession> RecordingChanged;
 
         Process engine;
@@ -79,7 +82,9 @@ namespace MirrorDock
             if (Opts.ShowTouches && !Opts.ViewOnly) { await Adb.Run("-s " + Serial + " shell settings put system show_touches 1"); touchesChanged = true; }
             if (Opts.StayAwake && !Opts.ViewOnly) { await Adb.Run("-s " + Serial + " shell svc power stayon true"); stayOnChanged = true; }
 
-            AudioOn = Opts.Audio;
+            AudioOn = Opts.Audio && !IsControl;
+            CurrentMbps = 0; double.TryParse(Opts.BitRate, out CurrentMbps);
+            AutoQuality = Opts.AutoQuality;
             string codec = forceJpeg || Opts.Codec == "jpeg" ? "jpeg" : "h264";
             string args = "-s " + Serial + " shell CLASSPATH=" + RemoteJar + " app_process / com.mirrordock.Server " +
                           socketName + " " + Opts.MaxSize + " " + Opts.Quality + " " + Opts.MaxFps + " " + codec + " " +
@@ -168,11 +173,13 @@ namespace MirrorDock
         }
 
         // ------------------------------------------------------------ video
-        // Runs on its own thread (started by MirrorWindow). present() gets a decoded frame and returns a bitmap to reuse.
-        public void ReadVideo(Func<Bitmap, Bitmap> present)
+        // Runs on its own thread (started by MirrorWindow). Each decoded frame is resized here to the size the window shows it at
+        // (targetSize gets the full frame size), so the window only copies it. present() takes the frame and returns one to reuse.
+        public void ReadVideo(Func<Bitmap, Bitmap> present, Func<int, int, Size> targetSize)
         {
             H264Decoder dec = null;
-            Bitmap spare = null;
+            Bitmap spare = null, full = null;
+            var scaler = new Scaler();
             string failure = null;
             try
             {
@@ -192,14 +199,19 @@ namespace MirrorDock
                     if (len <= 0 || len > 64000000) throw new IOException("Bad frame");
                     if (data.Length < len) data = new byte[len * 2];
                     ReadFully(st, data, len);
+                    bool behind = (flags & 1) == 0 && TrackLag(pts);
 
                     if (!H264)
                     {
                         Bitmap jpg;
                         using (var ms = new MemoryStream(data, 0, len))
-                        using (var img = Image.FromStream(ms, false, false)) jpg = new Bitmap(img);
-                        Bitmap back = present(jpg);
-                        if (back != null) back.Dispose();
+                        using (var img = Image.FromStream(ms, false, false))
+                        {
+                            jpg = new Bitmap(img.Width, img.Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+                            using (var g = Graphics.FromImage(jpg)) g.DrawImageUnscaled(img, 0, 0);
+                        }
+                        spare = present(scaler.Resize(jpg, targetSize(jpg.Width, jpg.Height), spare));
+                        jpg.Dispose();
                         continue;
                     }
 
@@ -220,8 +232,19 @@ namespace MirrorDock
                         pendingConfig = null;
                     }
                     Record(data, len, pts, (flags & 2) != 0);
-                    Bitmap frame = dec.Decode(feed, feedLen, fw, fh, spare);
-                    if (frame != null) spare = present(frame);
+                    if (behind && (flags & 2) == 0)
+                    {
+                        Bitmap skipped = dec.Decode(feed, feedLen, fw, fh, full);
+                        if (skipped != null && skipped != full) { if (full != null) full.Dispose(); full = skipped; }
+                        continue;
+                    }   // catch up: decode but don't draw
+                    Bitmap frame = dec.Decode(feed, feedLen, fw, fh, full);
+                    if (frame != null)
+                    {
+                        if (full != null && full != frame) full.Dispose();   // frame size changed (rotation)
+                        full = frame;   // the decoder keeps writing into this one
+                        spare = present(scaler.Resize(full, targetSize(full.Width, full.Height), spare));
+                    }
                 }
             }
             catch (IOException) { }
@@ -235,6 +258,8 @@ namespace MirrorDock
             {
                 if (dec != null) dec.Dispose();
                 if (spare != null) spare.Dispose();
+                if (full != null) full.Dispose();
+                scaler.Dispose();
             }
             if (failure != null && H264 && !Stopping)
             {
@@ -420,6 +445,57 @@ namespace MirrorDock
         }
 
         public void ReleaseGamepads() { for (int i = 0; i < 4; i++) GamepadState(i, false, null); }
+
+        // ------------------------------------------------------------ virtual mouse / keyboard (control mode, real keyboard)
+        public const int MouseSlot = 4, KeyboardSlot = 5;
+        readonly bool[] inputCreated = new bool[6];
+
+        public void InputReport(int slot, byte[] report)
+        {
+            if (Opts.ViewOnly) return;
+            if (!inputCreated[slot]) { inputCreated[slot] = true; Send(new byte[] { 12, (byte)slot }); }
+            var b = new byte[3 + report.Length];
+            b[0] = 13; b[1] = (byte)slot; b[2] = (byte)report.Length;
+            Buffer.BlockCopy(report, 0, b, 3, report.Length);
+            Send(b);
+        }
+
+        public void ReleaseInput(int slot) { if (inputCreated[slot]) { inputCreated[slot] = false; Send(new byte[] { 11, (byte)slot }); } }
+
+        // ------------------------------------------------------------ lag tracking + auto quality
+        readonly Stopwatch clock = Stopwatch.StartNew();
+        long minOffset = long.MaxValue, periodMin = long.MaxValue, periodStart, windowStart;
+        int windowFrames, windowBehind, calmWindows;
+        public bool AutoQuality = true;
+
+        // True when frames arrive late (Wi-Fi congestion or a slow PC): then frames are decoded but not drawn until we catch up.
+        bool TrackLag(long ptsUs)
+        {
+            long now = clock.ElapsedTicks * 1000000L / Stopwatch.Frequency;
+            long off = now - ptsUs;
+            if (off < minOffset) minOffset = off;
+            if (off < periodMin) periodMin = off;
+            if (now - periodStart > 30000000L) { if (periodMin != long.MaxValue) minOffset = periodMin; periodMin = long.MaxValue; periodStart = now; }   // follow slow clock drift
+            bool behind = off - minOffset > 150000 || (videoSock != null && videoSock.Available > 256 * 1024);
+            windowFrames++; if (behind) windowBehind++;
+            if (now - windowStart > 2000000L) { AdjustQuality(); windowStart = now; windowFrames = 0; windowBehind = 0; }
+            return behind;
+        }
+
+        void AdjustQuality()
+        {
+            if (!AutoQuality || !H264 || IsExtraScreen || windowFrames == 0) return;
+            double max; if (!double.TryParse(Opts.BitRate, out max)) return;
+            double cur = CurrentMbps > 0 ? CurrentMbps : max;
+            double next = cur;
+            if (windowBehind * 5 > windowFrames) { next = Math.Max(1.5, Math.Round(cur * 0.7, 1)); calmWindows = 0; }
+            else if (windowBehind == 0 && ++calmWindows >= 5 && cur < max) { next = Math.Min(max, Math.Round(cur * 1.25, 1)); calmWindows = 0; }
+            if (Math.Abs(next - cur) < 0.05) return;
+            CurrentMbps = next;
+            int bps = (int)(next * 1000000);
+            Send(new byte[] { 14, (byte)(bps >> 24), (byte)(bps >> 16), (byte)(bps >> 8), (byte)bps });
+            Say((next < cur ? "Connection slow: lowering quality to " : "Connection good: raising quality to ") + next.ToString("0.#") + " Mbps");
+        }
 
         string lastFromPhone;
 

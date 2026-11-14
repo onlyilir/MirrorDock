@@ -19,6 +19,7 @@ namespace MirrorDock
         public bool Audio = true;
         public bool Gamepad = true;         // forward PC game controllers to the phone
         public bool Notifications = true;   // show phone notifications on the PC
+        public bool AutoQuality = true;     // lower the bitrate by itself on a slow connection
         // Window & session
         public bool OnTop = false;
         public bool Fullscreen = false;

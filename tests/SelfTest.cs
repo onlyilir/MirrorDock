@@ -25,7 +25,7 @@ namespace MirrorDock
             s.Start(false).Wait();
             Console.WriteLine("H264=" + s.H264 + " audio=" + s.AudioOn);
             int frames = 0; Size size = Size.Empty;
-            var t = new Thread(() => s.ReadVideo(b => { frames++; size = b.Size; return null; })) { IsBackground = true };
+            var t = new Thread(() => s.ReadVideo(b => { frames++; size = b.Size; return null; }, (w, h) => new Size(w / 2, h / 2))) { IsBackground = true };
             t.Start();
             Thread.Sleep(2500);
             Console.WriteLine("frames decoded after 2.5 s: " + frames + " size " + size);
