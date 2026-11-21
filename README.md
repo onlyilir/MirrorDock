@@ -6,7 +6,7 @@
 
 Plug in your phone (or connect over Wi-Fi), click **Start mirroring**, and your phone shows up in a window. Then use your mouse and keyboard on it, hear its sound, record it, and drag files onto it.
 
-**[Download the latest version](https://github.com/onlyilir/MirrorDock/releases/latest)** for Windows 10 or 11. Or, once it's approved there, `winget install onlyilir.MirrorDock`.
+**[Download the latest version](https://github.com/onlyilir/MirrorDock/releases/latest)** for Windows 10 or 11, or see the website: **[mirrordock-app.pages.dev](https://mirrordock-app.pages.dev)**. Or, once it's approved there, `winget install onlyilir.MirrorDock`.
 
 <a href="https://buymeacoffee.com/only.ilir"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy me a coffee"></a>
 
