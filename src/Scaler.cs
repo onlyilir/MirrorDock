@@ -2,9 +2,50 @@ using System;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 
 namespace MirrorDock
 {
+    // Draws a 32-bit bitmap straight onto a window with plain GDI (StretchDIBits). The driver does the copy:
+    // about 1 ms for a full-screen frame, where GDI+ DrawImage took 40-45 ms and made fullscreen lag.
+    static class Blit
+    {
+        [StructLayout(LayoutKind.Sequential)]
+        struct BITMAPINFOHEADER { public int biSize, biWidth, biHeight; public short biPlanes, biBitCount; public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant; }
+        [DllImport("gdi32.dll")] static extern int StretchDIBits(IntPtr hdc, int xDest, int yDest, int wDest, int hDest, int xSrc, int ySrc, int wSrc, int hSrc, IntPtr bits, ref BITMAPINFOHEADER bmi, int usage, int rop);
+        [DllImport("gdi32.dll")] static extern int SetStretchBltMode(IntPtr hdc, int mode);
+        const int SRCCOPY = 0xCC0020, COLORONCOLOR = 3;
+
+        // False if it couldn't (odd pixel layout); then the caller falls back to GDI+.
+        public static bool Draw(IntPtr hdc, Bitmap bmp, Rectangle dest)
+        {
+            PixelFormat pf = bmp.PixelFormat;
+            if (pf != PixelFormat.Format32bppPArgb && pf != PixelFormat.Format32bppRgb && pf != PixelFormat.Format32bppArgb) return false;
+            BitmapData bd = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height), ImageLockMode.ReadOnly, pf);
+            try
+            {
+                if (bd.Stride != bmp.Width * 4) return false;
+                var h = new BITMAPINFOHEADER { biSize = 40, biWidth = bmp.Width, biHeight = -bmp.Height, biPlanes = 1, biBitCount = 32 };
+                if (dest.Width != bmp.Width || dest.Height != bmp.Height) SetStretchBltMode(hdc, COLORONCOLOR);   // only while resizing
+                return StretchDIBits(hdc, dest.X, dest.Y, dest.Width, dest.Height, 0, 0, bmp.Width, bmp.Height, bd.Scan0, ref h, 0, SRCCOPY) != 0;
+            }
+            finally { bmp.UnlockBits(bd); }
+        }
+    }
+
+    // Splits a picture's rows into bands and runs them on several CPU cores at once.
+    static class Bands
+    {
+        static readonly int Count = Math.Max(1, Math.Min(8, Environment.ProcessorCount / 2));
+
+        public static void Run(int rows, Action<int, int> band)
+        {
+            int n = rows < 64 ? 1 : Count;
+            if (n == 1) { band(0, rows); return; }
+            Parallel.For(0, n, i => band(rows * i / n, rows * (i + 1) / n));
+        }
+    }
+
     // Resizes video frames on the video thread, so the window only has to copy a ready-sized picture.
     // Smooth bilinear filtering; big shrinks first halve the picture (2x2 average) so fine text doesn't shimmer.
     // GDI+'s own scaling took 17-60 ms per frame on the UI thread, which made the window lag.
@@ -69,24 +110,29 @@ namespace MirrorDock
         }
 
         // 2x2 box average into a tightly packed buffer of (sw/2)x(sh/2).
-        static unsafe void Halve(byte* s, int sw, int sh, int sStride, byte* o)
+        static unsafe void Halve(byte* sp, int sw, int sh, int sStride, byte* op)
         {
             int hw = sw / 2, hh = sh / 2;
-            for (int y = 0; y < hh; y++)
+            IntPtr sIp = (IntPtr)sp, oIp = (IntPtr)op;
+            Bands.Run(hh, (y0, y1) =>
             {
-                uint* r0 = (uint*)(s + (2 * y) * sStride), r1 = (uint*)(s + (2 * y + 1) * sStride);
-                uint* d = (uint*)(o + y * hw * 4);
-                for (int x = 0; x < hw; x++)
+                byte* s = (byte*)sIp, o = (byte*)oIp;
+                for (int y = y0; y < y1; y++)
                 {
-                    uint a = r0[2 * x], b = r0[2 * x + 1], c = r1[2 * x], e = r1[2 * x + 1];
-                    uint rb = (((a & 0xFF00FF) + (b & 0xFF00FF) + (c & 0xFF00FF) + (e & 0xFF00FF) + 0x020002) >> 2) & 0xFF00FF;
-                    uint g = (((a & 0x00FF00) + (b & 0x00FF00) + (c & 0x00FF00) + (e & 0x00FF00) + 0x000200) >> 2) & 0x00FF00;
-                    d[x] = 0xFF000000u | rb | g;
+                    uint* r0 = (uint*)(s + (2 * y) * sStride), r1 = (uint*)(s + (2 * y + 1) * sStride);
+                    uint* d = (uint*)(o + y * hw * 4);
+                    for (int x = 0; x < hw; x++)
+                    {
+                        uint a = r0[2 * x], b = r0[2 * x + 1], c = r1[2 * x], e = r1[2 * x + 1];
+                        uint rb = (((a & 0xFF00FF) + (b & 0xFF00FF) + (c & 0xFF00FF) + (e & 0xFF00FF) + 0x020002) >> 2) & 0xFF00FF;
+                        uint g = (((a & 0x00FF00) + (b & 0x00FF00) + (c & 0x00FF00) + (e & 0x00FF00) + 0x000200) >> 2) & 0x00FF00;
+                        d[x] = 0xFF000000u | rb | g;
+                    }
                 }
-            }
+            });
         }
 
-        unsafe void Bilinear(byte* s, int sw, int sh, int sStride, byte* d, int dw, int dh, int dStride)
+        unsafe void Bilinear(byte* sp, int sw, int sh, int sStride, byte* dp, int dw, int dh, int dStride)
         {
             if (x0.Length < dw) { x0 = new int[dw]; fx = new int[dw]; }
             double kx = (double)sw / dw, ky = (double)sh / dh;
@@ -99,27 +145,33 @@ namespace MirrorDock
                 x0[x] = ix;
                 fx[x] = sw == 1 ? 0 : Math.Min(256, (int)((gx - ix) * 256));
             }
-            fixed (int* xs = x0, fs = fx)
+            int[] xa = x0, fa = fx;
+            IntPtr sIp = (IntPtr)sp, dIp = (IntPtr)dp;
+            Bands.Run(dh, (y0, y1) =>
             {
-                for (int y = 0; y < dh; y++)
+                byte* s = (byte*)sIp, d = (byte*)dIp;
+                fixed (int* xs = xa, fs = fa)
                 {
-                    double gy = (y + 0.5) * ky - 0.5;
-                    if (gy < 0) gy = 0;
-                    int iy = (int)gy;
-                    if (iy >= sh - 1) { iy = Math.Max(0, sh - 2); gy = sh - 1; }
-                    uint fy = sh == 1 ? 0u : (uint)Math.Min(256, (int)((gy - iy) * 256));
-                    uint* r0 = (uint*)(s + iy * sStride);
-                    uint* r1 = sh == 1 ? r0 : (uint*)(s + (iy + 1) * sStride);
-                    uint* o = (uint*)(d + y * dStride);
-                    for (int x = 0; x < dw; x++)
+                    for (int y = y0; y < y1; y++)
                     {
-                        int i = xs[x];
-                        int j = sw == 1 ? i : i + 1;
-                        uint f = (uint)fs[x];
-                        o[x] = Lerp(Lerp(r0[i], r0[j], f), Lerp(r1[i], r1[j], f), fy);
+                        double gy = (y + 0.5) * ky - 0.5;
+                        if (gy < 0) gy = 0;
+                        int iy = (int)gy;
+                        if (iy >= sh - 1) { iy = Math.Max(0, sh - 2); gy = sh - 1; }
+                        uint fy = sh == 1 ? 0u : (uint)Math.Min(256, (int)((gy - iy) * 256));
+                        uint* r0 = (uint*)(s + iy * sStride);
+                        uint* r1 = sh == 1 ? r0 : (uint*)(s + (iy + 1) * sStride);
+                        uint* o = (uint*)(d + y * dStride);
+                        for (int x = 0; x < dw; x++)
+                        {
+                            int i = xs[x];
+                            int j = sw == 1 ? i : i + 1;
+                            uint f = (uint)fs[x];
+                            o[x] = Lerp(Lerp(r0[i], r0[j], f), Lerp(r1[i], r1[j], f), fy);
+                        }
                     }
                 }
-            }
+            });
         }
 
         static uint Lerp(uint a, uint b, uint f)

@@ -485,6 +485,9 @@ namespace MirrorDock
         void AdjustQuality()
         {
             if (!AutoQuality || !H264 || IsExtraScreen || windowFrames == 0) return;
+            // USB has bandwidth to spare: late frames there come from the phone or the PC, and a lower
+            // bitrate only makes the picture worse. Only Wi-Fi phones (serial "ip:port") get turned down.
+            if (Serial == null || !Serial.Contains(":")) return;
             double max; if (!double.TryParse(Opts.BitRate, out max)) return;
             double cur = CurrentMbps > 0 ? CurrentMbps : max;
             double next = cur;

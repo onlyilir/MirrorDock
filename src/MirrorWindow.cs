@@ -177,6 +177,7 @@ namespace MirrorDock
 
         protected override void OnPaint(PaintEventArgs e)
         {
+            paintStart = System.Diagnostics.Stopwatch.GetTimestamp();
             Graphics g = e.Graphics;
             Rectangle a = Area;
             lock (frameLock)
@@ -199,15 +200,22 @@ namespace MirrorDock
                     g.FillRectangle(black, 0, 0, shown.Left, a.Height);
                     g.FillRectangle(black, shown.Right, 0, a.Width - shown.Right, a.Height);
                 }
-                g.CompositingMode = CompositingMode.SourceCopy;
-                if (frame.Width == w && frame.Height == h) g.DrawImageUnscaled(frame, shown.X, shown.Y);   // already sized: a plain copy
-                else
-                {   // only for a moment while resizing, until the next frame arrives at the new size
-                    g.InterpolationMode = InterpolationMode.NearestNeighbor;
-                    g.PixelOffsetMode = PixelOffsetMode.Half;
-                    g.DrawImage(frame, shown);
+                bool drawn;
+                IntPtr hdc = g.GetHdc();
+                try { drawn = Blit.Draw(hdc, frame, shown); }   // fast path: plain GDI, about 1 ms even fullscreen
+                finally { g.ReleaseHdc(hdc); }
+                if (!drawn)
+                {
+                    g.CompositingMode = CompositingMode.SourceCopy;
+                    if (frame.Width == w && frame.Height == h) g.DrawImageUnscaled(frame, shown.X, shown.Y);
+                    else
+                    {   // only for a moment while resizing, until the next frame arrives at the new size
+                        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                        g.PixelOffsetMode = PixelOffsetMode.Half;
+                        g.DrawImage(frame, shown);
+                    }
+                    g.CompositingMode = CompositingMode.SourceOver;
                 }
-                g.CompositingMode = CompositingMode.SourceOver;
             }
             if (overlay != null && DateTime.Now < overlayUntil)
             {
@@ -223,12 +231,18 @@ namespace MirrorDock
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 using (var br = new SolidBrush(Color.FromArgb(229, 72, 77))) g.FillEllipse(br, 12, 12, 12, 12);
             }
+            paints++;
+            paintTicks += System.Diagnostics.Stopwatch.GetTimestamp() - paintStart;
             if ((DateTime.Now - fpsStart).TotalSeconds >= 1)
             {
                 fpsText = frames + " fps";
-                frames = 0; fpsStart = DateTime.Now;
+                if (fullscreen && ++fsSeconds % 10 == 0)   // a line in the log every 10 s in fullscreen, for bug reports
+                    AppLog.Write(string.Format("Fullscreen {0}x{1}: {2} fps from phone, {3} drawn, {4:0.0} ms per draw",
+                        shown.Width, shown.Height, frames, paints, paints == 0 ? 0 : paintTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency / paints));
+                frames = 0; paints = 0; paintTicks = 0; fpsStart = DateTime.Now;
             }
         }
+        int paints, fsSeconds; long paintTicks, paintStart;
 
         public string Fps { get { return fpsText; } }
 

@@ -12,7 +12,7 @@ namespace MirrorDock
 {
     class MainForm : Form
     {
-        public const string Version = "1.2.0";
+        public const string Version = "1.2.1";
 
         readonly AppSettings settings = AppSettings.Load();
         readonly Dictionary<string, MirrorSession> sessions = new Dictionary<string, MirrorSession>();

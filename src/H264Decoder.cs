@@ -178,14 +178,18 @@ namespace MirrorDock
         static unsafe void Nv12ToRgb(byte* src, int srcStride, int paddedH, byte* dst, int dstStride, int w, int h, bool bt709)
         {
             BuildTables(bt709);
-            byte* uvPlane = src + srcStride * paddedH;
-            fixed (int* yt = yTab, rv = rV, gu = gU, gv = gV, bu = bU)
+            IntPtr srcIp = (IntPtr)src, dstIp = (IntPtr)dst;
+            int[] ytA = yTab, rvA = rV, guA = gU, gvA = gV, buA = bU;
+            Bands.Run(h, (y0, y1) =>
             {
-                for (int y = 0; y < h; y++)
+            byte* uvPlane = (byte*)srcIp + srcStride * paddedH;
+            fixed (int* yt = ytA, rv = rvA, gu = guA, gv = gvA, bu = buA)
+            {
+                for (int y = y0; y < y1; y++)
                 {
-                    byte* yRow = src + y * srcStride;
+                    byte* yRow = (byte*)srcIp + y * srcStride;
                     byte* uv = uvPlane + (y >> 1) * srcStride;
-                    uint* o = (uint*)(dst + y * dstStride);
+                    uint* o = (uint*)((byte*)dstIp + y * dstStride);
                     for (int x = 0; x < w; x += 2)
                     {
                         int u = uv[x], v = uv[x + 1];
@@ -196,6 +200,7 @@ namespace MirrorDock
                     }
                 }
             }
+            });
         }
 
         static uint Pack(int r, int g, int b)
