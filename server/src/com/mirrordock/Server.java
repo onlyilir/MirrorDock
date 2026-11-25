@@ -142,10 +142,24 @@ public final class Server {
     // ------------------------------------------------------------ H.264
     static void streamH264(Capture capture, Controller controller, DataOutputStream out, int maxSize, int fps, int bitrate) throws Exception {
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+        int failures = 0;
         while (running) {
             int w, h, dw, dh;
             if (screen != null) { w = dw = screen.width; h = dh = screen.height; }
             else { capture.measure(maxSize, 8); w = capture.width; h = capture.height; dw = capture.deviceWidth; dh = capture.deviceHeight; }
+            MediaCodec codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
+            // Ask the encoder what it can do before using it: some phones (e.g. the XREAL Beam Pro) can't encode
+            // their full resolution at 120 fps, and then the encoder dies a moment after starting.
+            if (screen == null) {
+                int fit = encoderFps(codec, w, h, fps);
+                if (fit == 0 && Math.max(w, h) > 640) {
+                    codec.release();
+                    maxSize = smaller(w, h);
+                    log("Encoder can't do " + w + "x" + h + ", trying " + maxSize);
+                    continue;
+                }
+                if (fit > 0 && fit < fps) { log("Encoder tops out at " + fit + " fps at " + w + "x" + h); fps = fit; }
+            }
             MediaFormat f = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h);
             f.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
             f.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
@@ -154,7 +168,6 @@ public final class Server {
             f.setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100000);
             f.setFloat("max-fps-to-encoder", fps);
             f.setInteger(MediaFormat.KEY_PRIORITY, 0);
-            MediaCodec codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
             codec.configure(f, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
             Surface surface = codec.createInputSurface();
             if (screen != null) { screen.attach(surface); controller.setDisplayId(screen.displayId()); }
@@ -202,6 +215,13 @@ public final class Server {
                     }
                     codec.releaseOutputBuffer(idx, false);
                 }
+            } catch (IllegalStateException e) {
+                // The encoder died (MediaCodec.CodecException is one of these). Rather than end the mirror,
+                // start again smaller and slower; give up after a few tries.
+                if (screen != null || ++failures > 3 || Math.max(w, h) <= 640) throw e;
+                maxSize = smaller(w, h);
+                fps = Math.min(fps, 60);
+                log("Encoder stopped at " + w + "x" + h + " (" + e.getMessage() + "), retrying at " + maxSize + ", " + fps + " fps");
             } finally {
                 try { codec.stop(); } catch (Exception ignored) { }
                 codec.release();
@@ -209,6 +229,20 @@ public final class Server {
                 surface.release();
             }
         }
+    }
+
+    // Next size down for the long side: 3/4 of now, a multiple of 8, at least 640.
+    static int smaller(int w, int h) { return Math.max(640, (int) (Math.max(w, h) * 0.75) / 8 * 8); }
+
+    // Highest frame rate (up to 'want') the encoder supports at w x h; 0 if it can't do that size at all; -1 if unknown.
+    static int encoderFps(MediaCodec codec, int w, int h, int want) {
+        try {
+            MediaCodecInfo.VideoCapabilities vc = codec.getCodecInfo().getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).getVideoCapabilities();
+            if (!vc.isSizeSupported(w, h)) return 0;
+            if (vc.areSizeAndRateSupported(w, h, want)) return want;
+            int top = (int) Math.floor(vc.getSupportedFrameRatesFor(w, h).getUpper());
+            return top >= 15 ? Math.min(want, top) : 0;
+        } catch (Exception e) { return -1; }
     }
 
     // ------------------------------------------------------------ JPEG (fallback)

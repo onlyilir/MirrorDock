@@ -41,8 +41,8 @@ Plug in your phone (or connect over Wi-Fi), click **Start mirroring**, and your 
 
 | File | What it is |
 | --- | --- |
-| `MirrorDock-1.2.1-Setup.exe` | Installer. Adds a Start menu entry, a desktop shortcut and an uninstaller in *Settings > Apps*. No admin rights needed. |
-| `MirrorDock-1.2.1-portable.zip` | Unzip anywhere and run `MirrorDock.exe`. Nothing is installed. |
+| `MirrorDock-1.2.2-Setup.exe` | Installer. Adds a Start menu entry, a desktop shortcut and an uninstaller in *Settings > Apps*. No admin rights needed. |
+| `MirrorDock-1.2.2-portable.zip` | Unzip anywhere and run `MirrorDock.exe`. Nothing is installed. |
 
 <img src="docs/screenshots/installer.png" alt="MirrorDock installer" width="420">
 
@@ -53,7 +53,7 @@ MirrorDock is new and not code-signed (certificates cost hundreds of dollars a y
 You can check that your download matches the release by comparing its SHA-256 hash with `SHA256SUMS.txt` on the release page:
 
 ```
-Get-FileHash .\MirrorDock-1.2.1-Setup.exe -Algorithm SHA256
+Get-FileHash .\MirrorDock-1.2.2-Setup.exe -Algorithm SHA256
 ```
 
 The full source is in this repo, and you can build it yourself (see below).
